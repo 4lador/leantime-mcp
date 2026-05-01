@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: leantmcp-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: leantmcp-linux-aarch64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: leantmcp-darwin-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: leantmcp-darwin-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: leantmcp-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Build
+        run: |
+          deno compile \
+            --allow-net \
+            --allow-env \
+            --allow-read \
+            --allow-write \
+            --target ${{ matrix.target }} \
+            --output ${{ matrix.artifact }} \
+            src/main.ts
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}*

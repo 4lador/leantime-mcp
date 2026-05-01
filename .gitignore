@@ -1,0 +1,11 @@
+.env
+
+leantmcp
+leantmcp-*
+*.exe
+
+.DS_Store
+Thumbs.db
+
+.deno/
+opencode.json
