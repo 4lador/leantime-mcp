@@ -5,7 +5,7 @@ import { dirname } from "@std/path";
 import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 
-const VERSION = "0.2.0";
+const VERSION = "1.0.0";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
