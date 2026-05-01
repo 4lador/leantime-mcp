@@ -16,8 +16,16 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 ## Install
 
+**Linux / macOS:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.ps1 | iex
 ```
 
 ## Setup
