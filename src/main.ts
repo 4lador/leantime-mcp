@@ -5,7 +5,7 @@ import { dirname } from "@std/path";
 import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -89,7 +89,7 @@ export function buildMergedConfig(
       leantime: {
         type: "local",
         command: mcpCommand,
-        env: {
+        environment: {
           LEANTIME_URL: leantimeUrl,
           LEANTIME_API_KEY: apiKey,
         },

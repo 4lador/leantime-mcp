@@ -57,8 +57,8 @@ Deno.test("buildMergedConfig — creates config from scratch", () => {
   const mcp = result.mcp as Record<string, Record<string, unknown>>;
   assertEquals(mcp.leantime.type, "local");
   assertEquals(mcp.leantime.command, ["/usr/bin/leantmcp"]);
-  assertEquals((mcp.leantime.env as Record<string, unknown>).LEANTIME_URL, "https://test.leantime.io");
-  assertEquals((mcp.leantime.env as Record<string, unknown>).LEANTIME_API_KEY, "lt_key");
+  assertEquals((mcp.leantime.environment as Record<string, unknown>).LEANTIME_URL, "https://test.leantime.io");
+  assertEquals((mcp.leantime.environment as Record<string, unknown>).LEANTIME_API_KEY, "lt_key");
 });
 
 Deno.test("buildMergedConfig — preserves existing mcp servers", () => {
@@ -76,11 +76,11 @@ Deno.test("buildMergedConfig — preserves existing mcp servers", () => {
 Deno.test("buildMergedConfig — overwrites existing leantime config", () => {
   const existing = {
     mcp: {
-      leantime: { type: "local", command: ["old"], env: { LEANTIME_URL: "https://old.com", LEANTIME_API_KEY: "old_key" } },
+      leantime: { type: "local", command: ["old"], environment: { LEANTIME_URL: "https://old.com", LEANTIME_API_KEY: "old_key" } },
     },
   };
   const result = buildMergedConfig(existing, ["/usr/bin/leantmcp"], "https://new.com", "new_key");
-  const env = ((result.mcp as Record<string, Record<string, unknown>>).leantime.env as Record<string, unknown>);
+  const env = ((result.mcp as Record<string, Record<string, unknown>>).leantime.environment as Record<string, unknown>);
   assertEquals(env.LEANTIME_URL, "https://new.com");
   assertEquals(env.LEANTIME_API_KEY, "new_key");
 });
@@ -94,7 +94,7 @@ Deno.test("buildMergedConfig — preserves non-mcp keys", () => {
 
 Deno.test("buildMergedConfig — does not strip trailing slashes (setupConfig does that)", () => {
   const result = buildMergedConfig({}, ["/usr/bin/leantmcp"], "https://test.leantime.io///", "lt_key");
-  const env = ((result.mcp as Record<string, Record<string, unknown>>).leantime.env as Record<string, unknown>);
+  const env = ((result.mcp as Record<string, Record<string, unknown>>).leantime.environment as Record<string, unknown>);
   assertEquals(env.LEANTIME_URL, "https://test.leantime.io///");
 });
 
