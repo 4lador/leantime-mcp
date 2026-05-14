@@ -83,10 +83,12 @@ export function registerTicketTools(server: McpServer, client: LeantimeClient) {
       status: z.number().optional().describe("Status ID"),
       milestoneId: z.string().optional().describe("Milestone ID to assign to"),
       sprintId: z.string().optional().describe("Sprint ID to assign to"),
-      userId: z.string().optional().describe("Assigned user ID"),
+      editorId: z.string().optional().describe("Assigned user ID"),
       tags: z.string().optional().describe("Comma-separated tags"),
       storypoints: z.string().optional().describe("Story points"),
       dateToFinish: z.string().optional().describe("Due date (YYYY-MM-DD)"),
+      dependingTicketId: z.string().optional().describe("Parent ticket ID (for subtasks)"),
+      planHours: z.number().optional().describe("Planned hours estimate"),
     },
     async (params) => {
       try {
@@ -100,14 +102,16 @@ export function registerTicketTools(server: McpServer, client: LeantimeClient) {
         if (params.status) ticket.status = params.status;
         if (params.milestoneId) ticket.milestoneid = params.milestoneId;
         if (params.sprintId) ticket.sprint = params.sprintId;
-        if (params.userId) ticket.userId = params.userId;
+        if (params.editorId) ticket.editorId = params.editorId;
         if (params.tags) ticket.tags = params.tags;
         if (params.storypoints) ticket.storypoints = params.storypoints;
         if (params.dateToFinish) ticket.dateToFinish = params.dateToFinish;
+        if (params.dependingTicketId) ticket.dependingTicketId = params.dependingTicketId;
+        if (params.planHours) ticket.planHours = params.planHours;
 
         const result = await client.call<unknown>(
           "tickets.addTicket",
-          ticket,
+          { values: ticket },
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -131,11 +135,13 @@ export function registerTicketTools(server: McpServer, client: LeantimeClient) {
       priority: z.number().optional().describe("New priority (1-5)"),
       milestoneId: z.string().optional().describe("New milestone ID"),
       sprintId: z.string().optional().describe("New sprint ID"),
-      userId: z.string().optional().describe("New assigned user ID"),
+      editorId: z.string().optional().describe("New assigned user ID"),
       tags: z.string().optional().describe("New comma-separated tags"),
       storypoints: z.string().optional().describe("New story points"),
       dateToFinish: z.string().optional().describe("New due date (YYYY-MM-DD)"),
       percentDone: z.number().optional().describe("Percent done (0-100)"),
+      dependingTicketId: z.string().optional().describe("Parent ticket ID (for subtasks)"),
+      planHours: z.number().optional().describe("Planned hours estimate"),
     },
     async ({ projectId, ticketId, ...updates }) => {
       try {
@@ -145,13 +151,14 @@ export function registerTicketTools(server: McpServer, client: LeantimeClient) {
             if (key === "milestoneId") ticket.milestoneid = value;
             else if (key === "sprintId") ticket.sprint = value;
             else if (key === "percentDone") ticket.percentDone = value;
+            else if (key === "dependingTicketId") ticket.dependingTicketId = value;
             else ticket[key] = value;
           }
         }
 
         const result = await client.call<unknown>(
           "tickets.updateTicket",
-          ticket,
+          { values: ticket },
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
