@@ -100,9 +100,9 @@ Add to your `.cursor/mcp.json`:
 | `LEANTIME_URL` | Base URL of your Leantime instance |
 | `LEANTIME_API_KEY` | Leantime API key (see below) |
 
-## Ticket descriptions (Markdown)
+## Rich text (Markdown)
 
-Ticket descriptions are written in **Markdown** and converted **deterministically server-side** to the rich HTML subset supported by Leantime's editor. Whatever the LLM produces, the rendering in Leantime is always correct — headings, lists, checkboxes, emphasis, code, and links.
+All rich-text fields — **ticket and milestone descriptions, comments, and project details** — are written in **Markdown** and converted **deterministically server-side** to the rich HTML subset supported by Leantime's editor. Whatever the LLM produces, the rendering in Leantime is always correct — headings, lists, checkboxes, emphasis, code, and links.
 
 Supported syntax:
 
@@ -244,6 +244,15 @@ LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY=lt_xxx... deno task dev
 ```
 
 The local instance raises the API rate limit to 120 req/min (Leantime's default of 10 req/min is too low for automated testing).
+
+### Tests
+
+```bash
+deno task test:unit        # unit + integration (mocked API, no instance needed)
+deno task test             # all tests incl. e2e (read-only, needs .env credentials)
+```
+
+End-to-end validation runs against the local instance: create a scratch project, exercise every tool (including the destructive cycles: rejection without `confirm: true`, execution with it), then clean up **only the ids created during the run** — never a sweep.
 
 ## Build
 
