@@ -26,7 +26,7 @@ Only the latest release receives security fixes.
 ## Security-relevant design
 
 - Raw HTML in Markdown input is always escaped — it cannot inject arbitrary markup into Leantime's rich-text fields.
-- The API key only transits from the environment to the `x-api-key` request header; it is never logged and never included in tool responses.
+- The API key lives in a single local keyring file (`~/.config/leantime/api-key`, mode 0600 on POSIX, user-profile ACLs on Windows). It only transits from there — or from the environment, the per-run override — into the `x-api-key` request header of the configured instance. It is never logged, never included in tool responses, and never present in committed config files (those hold `{file:...}` pointers only).
 - Destructive tools require an explicit `confirm: true` and respect `LEANTIME_MCP_DESTRUCTIVE_POLICY` (`ask`/`deny`/`allow`); project deletion is not exposed at all.
 - Credential creation (`key rotate` mints a new API key) is available only through the local CLI — never as an MCP tool an agent could invoke.
 

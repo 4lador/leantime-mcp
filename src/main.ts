@@ -20,7 +20,7 @@ import {
 } from "./keyring.ts";
 import { IS_WINDOWS } from "./keyring.ts";
 
-const VERSION = "1.4.2";
+const VERSION = "1.4.3";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server

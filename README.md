@@ -6,6 +6,8 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantime](https://leantime.io/), enabling LLM-powered tools (opencode, Claude Desktop, Cursor, or any MCP client) to interact with your Leantime projects.
 
+**Documentation**: [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
+
 ## Features
 
 - Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments and time tracking (37 tools)
@@ -244,6 +246,8 @@ leantmcp doctor       # health check: key file, permissions, config, live key
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (setup, tests, conventions, safety expectations, release process). The short version:
+
 No `.env` needed — dev and test flows resolve credentials from the environment first, then from `~/.config/leantime/` (see [Key management](#key-management)):
 
 ```bash
@@ -274,7 +278,7 @@ The local instance raises the API rate limit to 120 req/min (Leantime's default 
 
 ```bash
 deno task test:unit        # unit + integration (mocked API, no instance needed)
-deno task test             # all tests incl. e2e (read-only, needs .env credentials)
+deno task test             # all tests incl. e2e (read-only; credentials resolve from env or the keyring)
 ```
 
 End-to-end validation runs against the local instance: create a scratch project, exercise every tool (including the destructive cycles: rejection without `confirm: true`, execution with it), then clean up **only the ids created during the run** — never a sweep.
