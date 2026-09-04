@@ -6,6 +6,9 @@ import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 import {
   doctorChecks,
+  instanceAddCommand,
+  instanceListCommand,
+  instanceRemoveCommand,
   instanceUrlPath,
   keyRotateCommand,
   keySetCommand,
@@ -21,7 +24,7 @@ import {
 import { IS_WINDOWS } from "./keyring.ts";
 import { setupHarnessCommand, type Harness } from "./harness.ts";
 
-const VERSION = "1.5.1";
+const VERSION = "1.6.0";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -43,7 +46,13 @@ COMMANDS
   key rotate         Mint a new key (same role), verify it live, replace the stored one
   url set <url>      Set the Leantime instance URL (configs with pointers follow automatically)
   url show           Show the resolved instance URL and its source
+  instance add <n>   Add a named instance profile (~/.config/leantime/instances/<n>/)
+  instance list      List instance profiles (masked)
+  instance remove <n>  Remove an instance profile
   doctor             Health check: key file, config, live key validation
+
+Set LEANTIME_INSTANCE=<name> on any command (or server spawn) to target a
+named instance profile — without it, the top-level keyring is used.
 
 All harness configs use a bare command: the binary resolves credentials from
 ~/.config/leantime/ at startup — no secrets in any config file.
@@ -275,6 +284,24 @@ if (import.meta.main) {
       if (!r.ok) Deno.exit(1);
     } else {
       console.error("Usage: leantmcp url set <url>|show");
+      Deno.exit(1);
+    }
+  } else if (args[0] === "instance") {
+    const sub = args[1];
+    if (sub === "add") {
+      const r = await instanceAddCommand(args[2]);
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
+    } else if (sub === "list") {
+      const r = await instanceListCommand();
+      console.log(r.message);
+      if (!r.ok) Deno.exit(1);
+    } else if (sub === "remove") {
+      const r = await instanceRemoveCommand(args[2]);
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
+    } else {
+      console.error("Usage: leantmcp instance add|list|remove <name>");
       Deno.exit(1);
     }
   } else if (args[0] === "doctor") {

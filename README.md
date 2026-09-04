@@ -77,6 +77,35 @@ The config a harness ends up with is simply:
 
 `leantmcp` is a standard stdio MCP server: point your client at the binary, no environment variables required (the keyring provides them). `LEANTIME_URL` / `LEANTIME_API_KEY` environment variables remain available as per-run overrides — e.g. targeting a different instance for a test run.
 
+### Multiple instances
+
+The keyring holds one default instance (top-level files). To manage **additional** Leantime instances, create named profiles:
+
+```bash
+leantmcp instance add staging      # prompts for URL + key (hidden)
+leantmcp instance list             # profiles + masked keys + active
+leantmcp instance remove staging
+```
+
+Profiles live in `~/.config/leantime/instances/<name>/`. Any command — and any server spawn — targets a profile via `LEANTIME_INSTANCE`:
+
+```bash
+LEANTIME_INSTANCE=staging leantmcp key rotate   # rotates staging's key
+```
+
+In a harness config, declare one server per instance — still zero secrets:
+
+```json
+{
+  "mcpServers": {
+    "leantime":       { "command": "/path/to/leantmcp" },
+    "leantime-stage": { "command": "/path/to/leantmcp", "env": { "LEANTIME_INSTANCE": "staging" } }
+  }
+}
+```
+
+Resolution order: `LEANTIME_URL`/`LEANTIME_API_KEY` env (explicit override) → `LEANTIME_INSTANCE` profile → default top-level files.
+
 ## Rich text (Markdown)
 
 All rich-text fields — **ticket and milestone descriptions, comments, and project details** — are written in **Markdown** and converted **deterministically server-side** to the rich HTML subset supported by Leantime's editor. Whatever the LLM produces, the rendering in Leantime is always correct — headings, lists, checkboxes, emphasis, code, and links.

@@ -12,6 +12,12 @@ import type { FetchFn } from "./leantime-client.ts";
  * Deno.chmod is unimplemented there — it throws). */
 export const IS_WINDOWS = Deno.build.os === "windows";
 
+/** dirname() without pulling @std/path into every consumer of this module. */
+function dirnameOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return idx > 0 ? path.slice(0, idx) : ".";
+}
+
 export function homeDir(): string {
   return Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? ".";
 }
@@ -20,20 +26,52 @@ export function secretDir(): string {
   return `${homeDir()}/.config/leantime`;
 }
 
+/**
+ * Multiple named instances: set LEANTIME_INSTANCE=<name> to switch every
+ * command and server spawn to ~/.config/leantime/instances/<name>/. Without
+ * it, the top-level files are the configuration (the default instance).
+ */
+export function activeInstance(): string | null {
+  const name = Deno.env.get("LEANTIME_INSTANCE")?.trim();
+  return name ? name : null;
+}
+
+function instanceDir(name: string): string {
+  // No path separators in profile names — a name is an atomic identifier.
+  const clean = name.replace(/[/\\]/g, "");
+  return `${secretDir()}/instances/${clean}`;
+}
+
+/** Names of all configured instance profiles. */
+export async function instanceNames(): Promise<string[]> {
+  const entries: string[] = [];
+  try {
+    for await (const e of Deno.readDir(`${secretDir()}/instances`)) {
+      if (e.isDirectory) entries.push(e.name);
+    }
+    return entries.sort();
+  } catch {
+    return [];
+  }
+}
+
 export function secretPath(): string {
-  return `${secretDir()}/api-key`;
+  const inst = activeInstance();
+  return inst ? `${instanceDir(inst)}/api-key` : `${secretDir()}/api-key`;
 }
 
 /** The instance URL file — configuration, not a secret (no chmod needed). */
 export function instanceUrlPath(): string {
-  return `${secretDir()}/instance-url`;
+  const inst = activeInstance();
+  return inst ? `${instanceDir(inst)}/instance-url` : `${secretDir()}/instance-url`;
 }
 
 export async function writeUrl(url: string): Promise<string> {
-  await Deno.mkdir(secretDir(), { recursive: true });
+  const target = instanceUrlPath();
+  await Deno.mkdir(dirnameOf(target), { recursive: true });
   const clean = url.replace(/[\r\n]+$/, "").replace(/\/+$/, "");
-  await Deno.writeTextFile(instanceUrlPath(), clean);
-  return instanceUrlPath();
+  await Deno.writeTextFile(target, clean);
+  return target;
 }
 
 export async function readUrl(): Promise<string | null> {
@@ -49,22 +87,23 @@ export async function readUrl(): Promise<string | null> {
 
 /** Write the key to the secret file. Returns the path written. */
 export async function writeKey(key: string): Promise<string> {
-  await Deno.mkdir(secretDir(), { recursive: true });
+  const target = secretPath();
+  await Deno.mkdir(dirnameOf(target), { recursive: true });
   if (!IS_WINDOWS) {
     try {
-      await Deno.chmod(secretDir(), 0o700);
+      await Deno.chmod(dirnameOf(target), 0o700);
     } catch {
       // chmod on the existing dir can fail on some platforms — best effort
     }
   }
   // Strip any trailing newline: it would end up verbatim in the {file:} value.
-  await Deno.writeTextFile(secretPath(), key.replace(/[\r\n]+$/, ""));
+  await Deno.writeTextFile(target, key.replace(/[\r\n]+$/, ""));
   if (!IS_WINDOWS) {
-    await Deno.chmod(secretPath(), 0o600);
+    await Deno.chmod(target, 0o600);
   }
   // On Windows, privacy relies on the user-profile ACLs (files under
   // %USERPROFILE% are only readable by the user by default).
-  return secretPath();
+  return target;
 }
 
 export async function readKey(): Promise<string | null> {
@@ -461,9 +500,131 @@ export async function keyRotateCommand(
   };
 }
 
+// ---------------------------------------------------------------- instance profiles
+
+/** `leantmcp instance add <name>` — prompts (or env) for URL + key. */
+export async function instanceAddCommand(
+  name?: string,
+): Promise<CommandResult> {
+  if (!name) {
+    return { ok: false, message: "Usage: leantmcp instance add <name>" };
+  }
+  const existing = await instanceNames();
+  if (existing.includes(name)) {
+    return {
+      ok: false,
+      message: `Instance "${name}" already exists — remove it first if you want to recreate it.`,
+    };
+  }
+
+  const hadInstance = Deno.env.get("LEANTIME_INSTANCE");
+  Deno.env.set("LEANTIME_INSTANCE", name);
+  try {
+    const url = Deno.env.get("LEANTIME_URL")?.trim() ||
+      prompt(`[${name}] Leantime instance URL:`)?.trim() || "";
+    if (!url) return { ok: false, message: "No URL provided." };
+    const key = Deno.env.get("LEANTIME_API_KEY")?.trim() ||
+      await hiddenPrompt(`[${name}] API key (input hidden): `);
+    if (!key) return { ok: false, message: "No key provided." };
+
+    await writeUrl(url);
+    await writeKey(key);
+    return {
+      ok: true,
+      message:
+        `Instance "${name}" stored (${maskKey(key)}, ${url.replace(/\/+$/, "")}).\n` +
+        `Spawn a server on it with env LEANTIME_INSTANCE=${name}:\n` +
+        `  { "command": "/path/to/leantmcp", "env": { "LEANTIME_INSTANCE": "${name}" } }`,
+    };
+  } finally {
+    if (hadInstance !== undefined) Deno.env.set("LEANTIME_INSTANCE", hadInstance);
+    else Deno.env.delete("LEANTIME_INSTANCE");
+  }
+}
+
+/** `leantmcp instance list` — names, masked keys, which is active. */
+export async function instanceListCommand(): Promise<CommandResult> {
+  const names = await instanceNames();
+  const inst = activeInstance();
+  const lines: string[] = [];
+  const topKey = await (async () => {
+    const saved = Deno.env.get("LEANTIME_INSTANCE");
+    Deno.env.delete("LEANTIME_INSTANCE");
+    try {
+      return await readKey();
+    } finally {
+      if (saved !== undefined) Deno.env.set("LEANTIME_INSTANCE", saved);
+    }
+  })();
+  lines.push(
+    `(default)  ${topKey ? maskKey(topKey) : "(no key)"}${inst ? "" : "  ← active"}`,
+  );
+  for (const n of names) {
+    const saved = Deno.env.get("LEANTIME_INSTANCE");
+    Deno.env.set("LEANTIME_INSTANCE", n);
+    let masked = "(no key)";
+    try {
+      const k = await readKey();
+      if (k) masked = maskKey(k);
+    } finally {
+      if (saved !== undefined) Deno.env.set("LEANTIME_INSTANCE", saved);
+      else Deno.env.delete("LEANTIME_INSTANCE");
+    }
+    lines.push(`${n.padEnd(10)} ${masked}${inst === n ? "  ← active" : ""}`);
+  }
+  return { ok: true, message: lines.join("\n") };
+}
+
+/** `leantmcp instance remove <name>` — deletes the profile directory. */
+export async function instanceRemoveCommand(
+  name?: string,
+): Promise<CommandResult> {
+  if (!name) {
+    return { ok: false, message: "Usage: leantmcp instance remove <name>" };
+  }
+  const existing = await instanceNames();
+  if (!existing.includes(name)) {
+    return { ok: false, message: `Instance "${name}" does not exist.` };
+  }
+  await Deno.remove(`${secretDir()}/instances/${name}`, { recursive: true });
+  return {
+    ok: true,
+    message:
+      `Instance "${name}" removed (the key remains valid server-side — delete it in the Leantime UI if it was dedicated).`,
+  };
+}
+
 /** `leantmcp doctor` — collect all health checks without exiting. */
 export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
+
+  // Active instance profile
+  const inst = activeInstance();
+  results.push({
+    label: "instance",
+    status: "ok",
+    detail: inst
+      ? `"${inst}" (via LEANTIME_INSTANCE)`
+      : "default (top-level keyring)",
+  });
+
+  // Other profiles' key files
+  for (const n of await instanceNames()) {
+    if (n === inst) continue;
+    const saved = Deno.env.get("LEANTIME_INSTANCE");
+    Deno.env.set("LEANTIME_INSTANCE", n);
+    try {
+      const { exists, mode } = await keyFileStatus();
+      results.push({
+        label: `instance "${n}" key`,
+        status: exists ? (IS_WINDOWS || mode === "600" ? "ok" : "warn") : "fail",
+        detail: exists ? (mode ?? "acl") : "missing — leantmcp instance add " + n,
+      });
+    } finally {
+      if (saved !== undefined) Deno.env.set("LEANTIME_INSTANCE", saved);
+      else Deno.env.delete("LEANTIME_INSTANCE");
+    }
+  }
 
   // Secret file
   const { exists, mode } = await keyFileStatus();

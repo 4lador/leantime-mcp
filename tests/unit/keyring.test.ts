@@ -1,7 +1,12 @@
 import { assertEquals } from "@std/assert";
 import {
   IS_WINDOWS,
+  activeInstance,
   doctorChecks,
+  instanceAddCommand,
+  instanceListCommand,
+  instanceNames,
+  instanceRemoveCommand,
   instanceUrlPath,
   keyFileStatus,
   keyRotateCommand,
@@ -572,4 +577,146 @@ Deno.test("doctor — plaintext key in a harness config is flagged", async () =>
     else Deno.env.delete("HOME");
     await Deno.remove(tmp, { recursive: true });
   }
+});
+
+// ---------------------------------------------------------------- v1.6.0: instance profiles
+
+async function clearInstanceEnv(): Promise<void> {
+  Deno.env.delete("LEANTIME_INSTANCE");
+}
+
+Deno.test("instances — paths follow LEANTIME_INSTANCE", async () => {
+  await withTempHome(async () => {
+    await clearInstanceEnv();
+    assertEquals(secretPath().endsWith("/.config/leantime/api-key"), true);
+    assertEquals(instanceUrlPath().endsWith("/.config/leantime/instance-url"), true);
+    Deno.env.set("LEANTIME_INSTANCE", "staging");
+    try {
+      assertEquals(secretPath().endsWith("/instances/staging/api-key"), true);
+      assertEquals(instanceUrlPath().endsWith("/instances/staging/instance-url"), true);
+    } finally {
+      await clearInstanceEnv();
+    }
+  });
+});
+
+Deno.test("instances — add/list/remove round-trip via env vars", async () => {
+  await withTempHome(async () => {
+    await clearInstanceEnv();
+    Deno.env.set("LEANTIME_URL", "https://staging.leantime.test");
+    Deno.env.set("LEANTIME_API_KEY", LONG_KEY);
+    try {
+      const add = await instanceAddCommand("staging");
+      assertEquals(add.ok, true, add.message);
+      assertEquals((await instanceNames()).includes("staging"), true);
+
+      const list = await instanceListCommand();
+      assertEquals(list.ok, true);
+      assertEquals(list.message.includes("staging"), true);
+      assertEquals(list.message.includes(maskKey(LONG_KEY)), true);
+
+      const dup = await instanceAddCommand("staging");
+      assertEquals(dup.ok, false);
+
+      const rm = await instanceRemoveCommand("staging");
+      assertEquals(rm.ok, true, rm.message);
+      assertEquals((await instanceNames()).includes("staging"), false);
+      const rmAgain = await instanceRemoveCommand("staging");
+      assertEquals(rmAgain.ok, false);
+    } finally {
+      Deno.env.delete("LEANTIME_URL");
+      Deno.env.delete("LEANTIME_API_KEY");
+      await clearInstanceEnv();
+    }
+  });
+});
+
+Deno.test("instances — readKey/readUrl are profile-scoped", async () => {
+  await withTempHome(async () => {
+    // default (top-level)
+    await writeUrl("https://default.leantime.test");
+    await writeKey("lt_default_key_0000000000000000000000000000000");
+
+    Deno.env.set("LEANTIME_INSTANCE", "prod");
+    try {
+      // Profile has no files yet → null
+      assertEquals(await readKey(), null);
+      assertEquals(await readUrl(), null);
+
+      // Write under the profile → read back scoped
+      await writeUrl("https://prod.leantime.test");
+      await writeKey(LONG_KEY);
+      assertEquals(await readUrl(), "https://prod.leantime.test");
+      assertEquals(await readKey(), LONG_KEY);
+    } finally {
+      Deno.env.delete("LEANTIME_INSTANCE");
+    }
+
+    // Default unchanged
+    assertEquals(await readUrl(), "https://default.leantime.test");
+  });
+});
+
+Deno.test("instances — resolveServerEnv: explicit env wins over profile", async () => {
+  const hadUrl = Deno.env.get("LEANTIME_URL");
+  const hadKey = Deno.env.get("LEANTIME_API_KEY");
+  Deno.env.delete("LEANTIME_URL");
+  Deno.env.delete("LEANTIME_API_KEY");
+  try {
+    await withTempHome(async () => {
+      // top-level + profile, profile selected
+      await writeUrl("https://default.leantime.test");
+      await writeKey(LONG_KEY);
+      Deno.env.set("LEANTIME_INSTANCE", "local");
+      try {
+        await writeUrl("http://localhost:8090");
+        await writeKey("lt_local_key_0000000000000000000000000000000");
+
+        const r = await resolveServerEnv();
+        assertEquals(r.ok, true);
+        assertEquals((r as { url: string }).url, "http://localhost:8090");
+        assertEquals((r as { apiKey: string }).apiKey, "lt_local_key_0000000000000000000000000000000");
+
+        // Explicit env overrides the profile
+        Deno.env.set("LEANTIME_URL", "https://override.leantime.test");
+        Deno.env.set("LEANTIME_API_KEY", "lt_env_override");
+        try {
+          const e = await resolveServerEnv();
+          assertEquals((e as { url: string }).url, "https://override.leantime.test");
+          assertEquals((e as { apiKey: string }).apiKey, "lt_env_override");
+        } finally {
+          Deno.env.delete("LEANTIME_URL");
+          Deno.env.delete("LEANTIME_API_KEY");
+        }
+      } finally {
+        Deno.env.delete("LEANTIME_INSTANCE");
+      }
+    });
+  } finally {
+    if (hadUrl !== undefined) Deno.env.set("LEANTIME_URL", hadUrl);
+    if (hadKey !== undefined) Deno.env.set("LEANTIME_API_KEY", hadKey);
+  }
+});
+
+Deno.test("instances — doctor reports the active profile", async () => {
+  await withTempHome(async () => {
+    Deno.env.delete("LEANTIME_URL");
+    Deno.env.delete("LEANTIME_INSTANCE");
+    await writeUrl("https://leantime.test");
+    await writeKey(LONG_KEY);
+
+    const defaultDoctor = await doctorChecks();
+    const instCheck = defaultDoctor.find((c) => c.label === "instance")!;
+    assertEquals(instCheck.detail.includes("default"), true);
+
+    Deno.env.set("LEANTIME_INSTANCE", "prod");
+    try {
+      const prodDoctor = await doctorChecks();
+      const check = prodDoctor.find((c) => c.label === "instance")!;
+      assertEquals(check.detail.includes('"prod"'), true);
+      assertEquals(check.detail.includes("LEANTIME_INSTANCE"), true);
+    } finally {
+      Deno.env.delete("LEANTIME_INSTANCE");
+    }
+  });
 });

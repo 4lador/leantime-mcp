@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.0 — Multiple instances
+
+- Named instance profiles: `leantmcp instance add|list|remove` stores URL + key per profile under `~/.config/leantime/instances/<name>/`
+- `LEANTIME_INSTANCE=<name>` targets a profile on any command or server spawn — `key set/test/rotate`, `url set/show`, `doctor` and `serve` are all profile-aware with zero logic changes (paths resolve through the active profile)
+- Harness configs declare one server per instance with a bare command + `env: {"LEANTIME_INSTANCE": "..."}` — still no secrets anywhere
+- Resolution order: explicit `LEANTIME_URL`/`LEANTIME_API_KEY` env → `LEANTIME_INSTANCE` profile → default top-level files (existing installs unchanged)
+- `doctor` reports the active profile and lists other profiles' key health
+- 5 new unit tests (path scoping, add/list/remove round-trip, profile-scoped reads, resolution precedence, doctor reporting)
+
 ## v1.5.1 — Checksums + binary size transparency
 
 - Release CI publishes a SHA-256 checksum (`.sha256`) next to every platform artifact
