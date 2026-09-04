@@ -10,11 +10,13 @@ import {
   instanceListCommand,
   instanceRemoveCommand,
   instanceUrlPath,
+  instanceUseCommand,
   keyRotateCommand,
   keySetCommand,
   keyShowCommand,
   keyTestCommand,
   readKey,
+  readUrl,
   resolveServerEnv,
   secretPath,
   urlSetCommand,
@@ -24,7 +26,7 @@ import {
 import { IS_WINDOWS } from "./keyring.ts";
 import { setupHarnessCommand, type Harness } from "./harness.ts";
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -153,8 +155,16 @@ export async function setupConfig(
   global: boolean,
   options?: { url?: string; apiKey?: string },
 ): Promise<string> {
+  // Resolution order: explicit options > env vars > keyring (active instance)
   let leantimeUrl = options?.url ?? Deno.env.get("LEANTIME_URL") ?? "";
   let apiKey = options?.apiKey ?? Deno.env.get("LEANTIME_API_KEY") ?? "";
+
+  if (!leantimeUrl) {
+    leantimeUrl = (await readUrl()) ?? "";
+  }
+  if (!apiKey) {
+    apiKey = (await readKey()) ?? "";
+  }
 
   if (!leantimeUrl) {
     leantimeUrl = prompt("Leantime URL:") ?? "";
@@ -180,9 +190,9 @@ export async function setupConfig(
   // pointer in the config — opencode substitutes file contents natively.
   const storedKey = await readKey();
   const apiKeyValue = storedKey === apiKey
-    ? `{file:${secretPath()}}`
+    ? `{file:${await (await import("./keyring.ts")).resolvedSecretPath()}}`
     : apiKey;
-  const urlValue = `{file:${instanceUrlPath()}}`;
+  const urlValue = `{file:${await (await import("./keyring.ts")).resolvedInstanceUrlPath()}}`;
 
   const targetPath = getSetupPath(global);
   const existing = await readJsonFile(targetPath);
@@ -292,6 +302,10 @@ if (import.meta.main) {
       const r = await instanceAddCommand(args[2]);
       console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
       if (!r.ok) Deno.exit(1);
+    } else if (sub === "use") {
+      const r = await instanceUseCommand(args[2]);
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
     } else if (sub === "list") {
       const r = await instanceListCommand();
       console.log(r.message);
@@ -301,7 +315,7 @@ if (import.meta.main) {
       console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
       if (!r.ok) Deno.exit(1);
     } else {
-      console.error("Usage: leantmcp instance add|list|remove <name>");
+      console.error("Usage: leantmcp instance add|list|use|remove <name>");
       Deno.exit(1);
     }
   } else if (args[0] === "doctor") {

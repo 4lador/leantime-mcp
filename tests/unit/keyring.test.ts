@@ -8,20 +8,25 @@ import {
   instanceNames,
   instanceRemoveCommand,
   instanceUrlPath,
+  instanceUseCommand,
   keyFileStatus,
   keyRotateCommand,
   keySetCommand,
   keyShowCommand,
   keyTestCommand,
   maskKey,
+  readDefaultInstance,
   readKey,
   readUrl,
   resolveServerEnv,
   resolveUrl,
   resolveUrlDetailed,
+  resolvedSecretPath,
+  resolvedInstanceUrlPath,
   secretPath,
   urlSetCommand,
   urlShowCommand,
+  writeDefaultInstance,
   writeKey,
   writeUrl,
   fileMode,
@@ -92,9 +97,11 @@ Deno.test("keyring — secretPath prefers HOME and falls back to USERPROFILE", a
   const original = Deno.env.get("HOME");
   const tmp = await Deno.makeTempDir();
   Deno.env.set("HOME", tmp);
+  Deno.env.delete("LEANTIME_INSTANCE");
   try {
+    await writeDefaultInstance("default");
     assertEquals(secretPath().startsWith(tmp), true);
-    assertEquals(secretPath().endsWith("/.config/leantime/api-key"), true);
+    assertEquals(secretPath().endsWith("/instances/default/api-key"), true);
   } finally {
     if (original !== undefined) Deno.env.set("HOME", original);
     else Deno.env.delete("HOME");
@@ -105,7 +112,7 @@ Deno.test("keyring — secretPath prefers HOME and falls back to USERPROFILE", a
   try {
     Deno.env.delete("HOME");
     Deno.env.set("USERPROFILE", "C:\\Users\\t");
-    assertEquals(secretPath(), "C:\\Users\\t/.config/leantime/api-key");
+    assertEquals(secretPath(), "C:\\Users\\t/.config/leantime/instances/default/api-key");
   } finally {
     if (hadHome !== undefined) Deno.env.set("HOME", hadHome);
     if (hadProfile !== undefined) Deno.env.set("USERPROFILE", hadProfile);
@@ -588,12 +595,16 @@ async function clearInstanceEnv(): Promise<void> {
 Deno.test("instances — paths follow LEANTIME_INSTANCE", async () => {
   await withTempHome(async () => {
     await clearInstanceEnv();
-    assertEquals(secretPath().endsWith("/.config/leantime/api-key"), true);
-    assertEquals(instanceUrlPath().endsWith("/.config/leantime/instance-url"), true);
+    await writeDefaultInstance("prod");
+    // Async-resolved paths follow the default file
+    assertEquals((await resolvedSecretPath()).endsWith("/instances/prod/api-key"), true);
+    assertEquals((await resolvedInstanceUrlPath()).endsWith("/instances/prod/instance-url"), true);
+    // Sync display paths follow the env (or "default" when unset)
     Deno.env.set("LEANTIME_INSTANCE", "staging");
     try {
       assertEquals(secretPath().endsWith("/instances/staging/api-key"), true);
       assertEquals(instanceUrlPath().endsWith("/instances/staging/instance-url"), true);
+      assertEquals((await resolvedSecretPath()).endsWith("/instances/staging/api-key"), true);
     } finally {
       await clearInstanceEnv();
     }
@@ -702,17 +713,19 @@ Deno.test("instances — doctor reports the active profile", async () => {
   await withTempHome(async () => {
     Deno.env.delete("LEANTIME_URL");
     Deno.env.delete("LEANTIME_INSTANCE");
+    await writeDefaultInstance("prod");
     await writeUrl("https://leantime.test");
     await writeKey(LONG_KEY);
 
     const defaultDoctor = await doctorChecks();
-    const instCheck = defaultDoctor.find((c) => c.label === "instance")!;
-    assertEquals(instCheck.detail.includes("default"), true);
+    const instCheck = defaultDoctor.find((c) => c.label === "default instance")!;
+    assertEquals(instCheck.detail.includes('"prod"'), true);
+    assertEquals(instCheck.status, "ok");
 
     Deno.env.set("LEANTIME_INSTANCE", "prod");
     try {
       const prodDoctor = await doctorChecks();
-      const check = prodDoctor.find((c) => c.label === "instance")!;
+      const check = prodDoctor.find((c) => c.label === "default instance")!;
       assertEquals(check.detail.includes('"prod"'), true);
       assertEquals(check.detail.includes("LEANTIME_INSTANCE"), true);
     } finally {

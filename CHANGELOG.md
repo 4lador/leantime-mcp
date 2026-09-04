@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.0 — Normalized instance structure
+
+- All credentials now live under `~/.config/leantime/instances/<name>/` — the top-level files are gone; a `default` file names the default instance
+- `instance use <name>` sets the default; `instance remove` refuses to remove the current default
+- `instance list` shows all profiles with masked keys, URLs, and default/active markers
+- First-time setup (`key set` / `url set` / `setup`) auto-creates `instances/default/` + the `default` file — zero-friction for new users
+- `doctor` validates the default file and reports per-profile key health
+- Resolution: `LEANTIME_INSTANCE` env > `default` file — no more top-level fallback
+- README: updated Multiple instances section with the normalized layout
+
 ## v1.6.0 — Multiple instances
 
 - Named instance profiles: `leantmcp instance add|list|remove` stores URL + key per profile under `~/.config/leantime/instances/<name>/`

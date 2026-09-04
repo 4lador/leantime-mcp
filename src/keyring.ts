@@ -27,13 +27,49 @@ export function secretDir(): string {
 }
 
 /**
- * Multiple named instances: set LEANTIME_INSTANCE=<name> to switch every
- * command and server spawn to ~/.config/leantime/instances/<name>/. Without
- * it, the top-level files are the configuration (the default instance).
+ * Multiple named instances: all credentials live under
+ * ~/.config/leantime/instances/<name>/. The `default` file names the default
+ * instance. LEANTIME_INSTANCE=<name> overrides the default on any command.
  */
-export function activeInstance(): string | null {
-  const name = Deno.env.get("LEANTIME_INSTANCE")?.trim();
-  return name ? name : null;
+export function defaultInstancePath(): string {
+  return `${secretDir()}/default`;
+}
+
+export async function readDefaultInstance(): Promise<string | null> {
+  try {
+    const name = (await Deno.readTextFile(defaultInstancePath())).replace(/[\r\n]+$/, "").trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeDefaultInstance(name: string): Promise<void> {
+  await Deno.mkdir(secretDir(), { recursive: true });
+  await Deno.writeTextFile(defaultInstancePath(), name);
+}
+
+/**
+ * The active instance: LEANTIME_INSTANCE env > the `default` file.
+ * Returns null when nothing is configured yet (first-time setup).
+ */
+export async function activeInstance(): Promise<string | null> {
+  const fromEnv = Deno.env.get("LEANTIME_INSTANCE")?.trim();
+  if (fromEnv) return fromEnv;
+  return await readDefaultInstance();
+}
+
+/**
+ * Resolve the active instance, auto-creating "default" on first use.
+ * Called by writeKey/writeUrl so that `key set` / `url set` / `setup`
+ * work without any pre-existing configuration.
+ */
+async function activeInstanceForWrite(): Promise<string> {
+  const inst = await activeInstance();
+  if (inst) return inst;
+  // First-time setup: create the "default" instance
+  await writeDefaultInstance("default");
+  return "default";
 }
 
 function instanceDir(name: string): string {
@@ -56,18 +92,36 @@ export async function instanceNames(): Promise<string[]> {
 }
 
 export function secretPath(): string {
-  const inst = activeInstance();
-  return inst ? `${instanceDir(inst)}/api-key` : `${secretDir()}/api-key`;
+  // For write paths we need sync access; for reads the caller handles null.
+  // The active instance is resolved by the caller (readKey/writeKey).
+  // This function is only used for display/status — resolve synchronously
+  // from env (the common case for display), or fall back to "default".
+  const fromEnv = Deno.env.get("LEANTIME_INSTANCE")?.trim();
+  const name = fromEnv || "default";
+  return `${instanceDir(name)}/api-key`;
 }
 
 /** The instance URL file — configuration, not a secret (no chmod needed). */
 export function instanceUrlPath(): string {
-  const inst = activeInstance();
-  return inst ? `${instanceDir(inst)}/instance-url` : `${secretDir()}/instance-url`;
+  const fromEnv = Deno.env.get("LEANTIME_INSTANCE")?.trim();
+  const name = fromEnv || "default";
+  return `${instanceDir(name)}/instance-url`;
+}
+
+/** Async-resolved paths (the authoritative ones for I/O). */
+export async function resolvedSecretPath(): Promise<string> {
+  const inst = await activeInstance() ?? "default";
+  return `${instanceDir(inst)}/api-key`;
+}
+
+export async function resolvedInstanceUrlPath(): Promise<string> {
+  const inst = await activeInstance() ?? "default";
+  return `${instanceDir(inst)}/instance-url`;
 }
 
 export async function writeUrl(url: string): Promise<string> {
-  const target = instanceUrlPath();
+  const inst = await activeInstanceForWrite();
+  const target = `${instanceDir(inst)}/instance-url`;
   await Deno.mkdir(dirnameOf(target), { recursive: true });
   const clean = url.replace(/[\r\n]+$/, "").replace(/\/+$/, "");
   await Deno.writeTextFile(target, clean);
@@ -75,8 +129,11 @@ export async function writeUrl(url: string): Promise<string> {
 }
 
 export async function readUrl(): Promise<string | null> {
+  const inst = await activeInstance();
+  if (!inst) return null;
+  const path = `${instanceDir(inst)}/instance-url`;
   try {
-    const url = (await Deno.readTextFile(instanceUrlPath()))
+    const url = (await Deno.readTextFile(path))
       .replace(/[\r\n]+$/, "")
       .replace(/\/+$/, "");
     return url || null;
@@ -87,7 +144,8 @@ export async function readUrl(): Promise<string | null> {
 
 /** Write the key to the secret file. Returns the path written. */
 export async function writeKey(key: string): Promise<string> {
-  const target = secretPath();
+  const inst = await activeInstanceForWrite();
+  const target = `${instanceDir(inst)}/api-key`;
   await Deno.mkdir(dirnameOf(target), { recursive: true });
   if (!IS_WINDOWS) {
     try {
@@ -107,8 +165,11 @@ export async function writeKey(key: string): Promise<string> {
 }
 
 export async function readKey(): Promise<string | null> {
+  const inst = await activeInstance();
+  if (!inst) return null;
+  const path = `${instanceDir(inst)}/api-key`;
   try {
-    return (await Deno.readTextFile(secretPath())).replace(/[\r\n]+$/, "");
+    return (await Deno.readTextFile(path)).replace(/[\r\n]+$/, "");
   } catch {
     return null;
   }
@@ -131,9 +192,10 @@ export async function keyFileStatus(): Promise<{
   exists: boolean;
   mode: string | null;
 }> {
+  const path = await resolvedSecretPath();
   try {
-    await Deno.stat(secretPath());
-    return { exists: true, mode: await fileMode(secretPath()) };
+    await Deno.stat(path);
+    return { exists: true, mode: await fileMode(path) };
   } catch {
     return { exists: false, mode: null };
   }
@@ -542,40 +604,66 @@ export async function instanceAddCommand(
   }
 }
 
-/** `leantmcp instance list` — names, masked keys, which is active. */
+/** `leantmcp instance use <name>` — set the default instance. */
+export async function instanceUseCommand(
+  name?: string,
+): Promise<CommandResult> {
+  if (!name) {
+    return { ok: false, message: "Usage: leantmcp instance use <name>" };
+  }
+  const existing = await instanceNames();
+  if (!existing.includes(name)) {
+    return {
+      ok: false,
+      message: `Instance "${name}" does not exist. Available: ${existing.join(", ") || "(none)"}`,
+    };
+  }
+  await writeDefaultInstance(name);
+  return {
+    ok: true,
+    message: `Default instance is now "${name}". Commands without LEANTIME_INSTANCE target it.`,
+  };
+}
+
+/** `leantmcp instance list` — names, masked keys, which is default/active. */
 export async function instanceListCommand(): Promise<CommandResult> {
   const names = await instanceNames();
-  const inst = activeInstance();
+  const def = await readDefaultInstance();
+  const envInst = Deno.env.get("LEANTIME_INSTANCE")?.trim() || null;
+  const active = envInst ?? def;
+
+  if (names.length === 0 && !def) {
+    return {
+      ok: true,
+      message: "No instances configured. Run: leantmcp key set (creates a default instance)",
+    };
+  }
+
   const lines: string[] = [];
-  const topKey = await (async () => {
-    const saved = Deno.env.get("LEANTIME_INSTANCE");
-    Deno.env.delete("LEANTIME_INSTANCE");
-    try {
-      return await readKey();
-    } finally {
-      if (saved !== undefined) Deno.env.set("LEANTIME_INSTANCE", saved);
-    }
-  })();
-  lines.push(
-    `(default)  ${topKey ? maskKey(topKey) : "(no key)"}${inst ? "" : "  ← active"}`,
-  );
   for (const n of names) {
     const saved = Deno.env.get("LEANTIME_INSTANCE");
     Deno.env.set("LEANTIME_INSTANCE", n);
     let masked = "(no key)";
+    let url = "";
     try {
       const k = await readKey();
       if (k) masked = maskKey(k);
+      const u = await readUrl();
+      if (u) url = u;
     } finally {
       if (saved !== undefined) Deno.env.set("LEANTIME_INSTANCE", saved);
       else Deno.env.delete("LEANTIME_INSTANCE");
     }
-    lines.push(`${n.padEnd(10)} ${masked}${inst === n ? "  ← active" : ""}`);
+    const markers = [
+      n === def ? "← default" : "",
+      n === active ? "← active" : "",
+    ].filter(Boolean).join(", ");
+    lines.push(`${n.padEnd(12)} ${masked.padEnd(16)} ${url}${markers ? `  ${markers}` : ""}`);
   }
   return { ok: true, message: lines.join("\n") };
 }
 
-/** `leantmcp instance remove <name>` — deletes the profile directory. */
+/** `leantmcp instance remove <name>` — refuses to remove the default. */
 export async function instanceRemoveCommand(
   name?: string,
 ): Promise<CommandResult> {
@@ -585,6 +673,13 @@ export async function instanceRemoveCommand(
   const existing = await instanceNames();
   if (!existing.includes(name)) {
     return { ok: false, message: `Instance "${name}" does not exist.` };
+  }
+  const def = await readDefaultInstance();
+  if (def === name) {
+    return {
+      ok: false,
+      message: `"${name}" is the default instance — switch first: leantmcp instance use <other>`,
+    };
   }
   await Deno.remove(`${secretDir()}/instances/${name}`, { recursive: true });
   return {
@@ -598,19 +693,35 @@ export async function instanceRemoveCommand(
 export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
 
-  // Active instance profile
-  const inst = activeInstance();
-  results.push({
-    label: "instance",
-    status: "ok",
-    detail: inst
-      ? `"${inst}" (via LEANTIME_INSTANCE)`
-      : "default (top-level keyring)",
-  });
+  // Default instance configuration
+  const def = await readDefaultInstance();
+  const envInst = Deno.env.get("LEANTIME_INSTANCE")?.trim() || null;
+  const active = envInst ?? def;
+  if (!def) {
+    results.push({
+      label: "default instance",
+      status: "warn",
+      detail: "no ~/.config/leantime/default file — first `key set` or `url set` creates one",
+    });
+  } else {
+    const names = await instanceNames();
+    if (!names.includes(def)) {
+      results.push({
+        label: "default instance",
+        status: "fail",
+        detail: `"${def}" is the default but doesn't exist in instances/ — run: leantmcp instance use <valid-name>`,
+      });
+    } else {
+      results.push({
+        label: "default instance",
+        status: "ok",
+        detail: active ? `"${active}"${envInst ? " (via LEANTIME_INSTANCE)" : ""}` : `"${def}"`,
+      });
+    }
+  }
 
-  // Other profiles' key files
+  // All profiles' key health
   for (const n of await instanceNames()) {
-    if (n === inst) continue;
     const saved = Deno.env.get("LEANTIME_INSTANCE");
     Deno.env.set("LEANTIME_INSTANCE", n);
     try {
@@ -627,12 +738,13 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
   }
 
   // Secret file
+  const keyPath = await resolvedSecretPath();
   const { exists, mode } = await keyFileStatus();
   if (!exists) {
     results.push({
       label: "key file",
       status: "fail",
-      detail: `${secretPath()} missing — run: leantmcp key set`,
+      detail: `${keyPath} missing — run: leantmcp key set`,
     });
   } else {
     const permOk = IS_WINDOWS || mode === "600";
@@ -640,10 +752,10 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
       label: "key file",
       status: permOk ? "ok" : "warn",
       detail: IS_WINDOWS
-        ? `${secretPath()} (ACL-managed, user profile)`
+        ? `${keyPath} (ACL-managed, user profile)`
         : mode === "600"
-        ? `${secretPath()} (0600)`
-        : `${secretPath()} has mode ${mode} — run: chmod 600 ${secretPath()}`,
+        ? `${keyPath} (0600)`
+        : `${keyPath} has mode ${mode} — run: chmod 600 ${keyPath}`,
     });
   }
 
