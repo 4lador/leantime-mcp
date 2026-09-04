@@ -540,3 +540,36 @@ Deno.test("doctor — .env drift is detected (mismatch vs duplicate)", async () 
     await Deno.remove(tmp, { recursive: true });
   }
 });
+
+// ---------------------------------------------------------------- v1.5.0: doctor plaintext detection in harness configs
+
+Deno.test("doctor — plaintext key in a harness config is flagged", async () => {
+  const originalCwd = Deno.cwd();
+  const tmp = await Deno.makeTempDir();
+  const originalHome = Deno.env.get("HOME");
+  Deno.env.set("HOME", tmp);
+  Deno.env.delete("LEANTIME_URL");
+  try {
+    await writeKey(LONG_KEY);
+    await writeUrl("https://leantime.test");
+    Deno.chdir(tmp);
+    // A claude-code project config with a plaintext key (the old bad practice)
+    await Deno.writeTextFile(
+      `${tmp}/.mcp.json`,
+      JSON.stringify({
+        mcpServers: { leantime: { command: "leantmcp", env: { LEANTIME_API_KEY: LONG_KEY } } },
+      }),
+    );
+    const results = await doctorChecks();
+    const flagged = results.find((c) => c.label.startsWith("plaintext key in claude-code"));
+    assertEquals(flagged !== undefined, true, "plaintext key not detected");
+    assertEquals(flagged!.status, "warn");
+    assertEquals(flagged!.detail.includes(".mcp.json"), true);
+    assertEquals(flagged!.detail.includes("setup"), true);
+  } finally {
+    Deno.chdir(originalCwd);
+    if (originalHome !== undefined) Deno.env.set("HOME", originalHome);
+    else Deno.env.delete("HOME");
+    await Deno.remove(tmp, { recursive: true });
+  }
+});

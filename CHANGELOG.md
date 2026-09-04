@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.0 — Honest docs, exhaustive shipped e2e, harness support
+
+- **Exhaustive local e2e shipped in the repo** (`tests/e2e/local.test.ts`, opt-in via `LEANTIME_E2E=local`): scratch project, full tool surface, assignment enforcement, markdown conversions, scoping regression (a project's tickets can never leak into another), destructive cycles (reject without `confirm`, execute with it, `deny` policy), then cleanup strictly by captured ids — the `deleteCaptured()` helper refuses anything it did not create — and a final emptiness assertion. CI runs it on every push (`local-e2e` job) against the dockerized Leantime
+- **`scripts/local-instance-bootstrap.sh`**: fully automated first-run wizard (install → invite → login → API key) for the local docker instance — no manual clicking
+- **No more vacuous tests**: the read-only e2e now fails on an empty project list and reports loud, explicit skips instead of silently passing on empty data (the failure mode that once masked a total data loss behind a green "e2e 4/4")
+- **Harness support**: `setup claude-code` (`./.mcp.json` + user-scope hint), `setup claude-desktop` (per-OS config path), `setup cursor` (`~/.cursor/mcp.json`), `setup codex` (`~/.codex/config.toml`) — each ensures the keyring exists (prompting if needed) then writes a **bare command with no secrets**; the binary resolves credentials from `~/.config/leantime/` at startup
+- **`doctor`** now detects plaintext API keys in known harness configs and suggests re-running the matching setup
+- README rewritten around transparency: "How it works" (stdio server spawned by your harness — no daemon; env > keyring resolution; one keyring shared by all harnesses), a per-harness compatibility table, the universal setup flow — and zero plaintext key examples anywhere
+- New unit tests for harness writers (per-OS paths, merge/idempotence, no-secret guarantees) and doctor detection — 151 total
+
 ## v1.4.3 — Documentation
 
 - CONTRIBUTING.md (dev setup, tests, safety expectations, release process)

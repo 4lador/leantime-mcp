@@ -17,6 +17,7 @@
     "test": "deno test --allow-net --allow-env --allow-read --allow-write",
     "test:unit": "deno test --allow-net --allow-env --allow-read --allow-write tests/unit/",
     "test:integration": "deno test --allow-net --allow-env --allow-read --allow-write tests/integration/",
-    "test:e2e": "deno test --env --allow-net --allow-env --allow-read --allow-write tests/e2e/"
+    "test:e2e": "deno test --allow-net --allow-env --allow-read --allow-write tests/e2e/",
+    "test:e2e:local": "deno test --allow-net --allow-env --allow-read --allow-write tests/e2e/local.test.ts"
   }
 }

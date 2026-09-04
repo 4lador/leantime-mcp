@@ -555,5 +555,34 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
     // no .env — the normal state
   }
 
+  // Plaintext keys in known harness configs (they should hold bare commands)
+  const harnessConfigs: [string, string][] = [
+    ["./.mcp.json", "claude-code (project)"],
+    [`${homeDir()}/.claude.json`, "claude-code (user)"],
+    ["./opencode.json", "opencode (project)"],
+  ];
+  try {
+    const desktop = (await import("./harness.ts")).claudeDesktopConfigPath();
+    harnessConfigs.push([desktop, "claude-desktop"]);
+    harnessConfigs.push([(await import("./harness.ts")).cursorConfigPath(), "cursor"]);
+    harnessConfigs.push([(await import("./harness.ts")).codexConfigPath(), "codex"]);
+  } catch {
+    // harness module unavailable — skip those
+  }
+  for (const [path, label] of harnessConfigs) {
+    try {
+      const content = await Deno.readTextFile(path);
+      if (/lt_[A-Za-z0-9_-]{20,}/.test(content)) {
+        results.push({
+          label: `plaintext key in ${label}`,
+          status: "warn",
+          detail: `${path} embeds a plaintext API key — re-run the matching 'leantmcp setup …' to switch to a bare command (keyring-based)`,
+        });
+      }
+    } catch {
+      // config not present — fine
+    }
+  }
+
   return results;
 }

@@ -24,9 +24,19 @@ deno task test        # everything, incl. read-only e2e (live credentials)
 
 Expectations:
 
-- CI runs the suite on **Linux and Windows** — keep tests OS-agnostic (guard POSIX-only assertions like file permissions behind `Deno.build.os`, never assume `/tmp` paths)
+- CI runs three jobs on every push: unit tests (Linux), smoke on `windows-latest` (tests, native compile, key/URL flows, MCP handshake), and `local-e2e` — the exhaustive suite against a real dockerized Leantime. Keep tests OS-agnostic (guard POSIX-only assertions like file permissions behind `Deno.build.os`, never assume `/tmp` paths)
 - Test mocks must mirror the **real API behavior** (response shapes, `searchCriteria` scoping, error forms) — a lying mock is worse than no mock
-- Anything that touches the live API in tests must be **read-only**, or clean up strictly by the ids it created — never sweep
+- **No vacuous tests**: a test that passes on empty data without saying so is a bug — report loud skips (`console.warn`) instead of silent conditional passes
+- Anything that touches the live API in tests must be **read-only**, or clean up strictly by the ids it created — the local e2e's `deleteCaptured()` helper refuses anything else, and so should you
+
+To run the exhaustive local e2e yourself:
+
+```bash
+docker compose up -d
+LEANTIME_E2E=local LEANTIME_URL=http://localhost:8090 \
+LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)" \
+deno task test:e2e:local
+```
 
 ## Safety expectations
 

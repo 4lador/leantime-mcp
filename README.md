@@ -32,62 +32,40 @@ curl -fsSL https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.sh
 irm https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.ps1 | iex
 ```
 
+## How it works
+
+- `leantmcp` is a **stdio MCP server**: your harness (opencode, Claude Code, Claude Desktop, Cursor, Codex…) spawns it at session start and stops it at session end. No daemon, no port, nothing runs in the background.
+- **Credentials never live in harness configs.** The binary resolves them at startup: environment variables first (per-run override), then the keyring — `~/.config/leantime/api-key` (mode 0600) and `~/.config/leantime/instance-url`. One keyring, shared by every harness you use.
+- That fallback is what makes every config below a **bare command with no secrets**: there is nothing sensitive to put in a config file in the first place. `leantmcp doctor` flags any legacy config that still embeds a plaintext key.
+
 ## Setup
 
-The `leantmcp setup` commands write configuration for **opencode** specifically. If you use another client, skip to the relevant section below.
-
-### opencode
-
-**Global (all projects):**
+The universal flow, for every harness:
 
 ```bash
-leantmcp setup global
+leantmcp url set https://your-instance.leantime.io   # once
+leantmcp key set                                      # once — hidden prompt
+leantmcp setup <your-harness>                         # writes the config (see table)
+leantmcp doctor                                       # verify everything end-to-end
 ```
 
-Prompts for your Leantime URL and API key, writes config to `~/.opencode/opencode.json`.
+`setup <harness>` creates the keyring first if it's missing (it prompts), then writes the harness's native config:
 
-**Current project only:**
+| Harness | Command | What gets written | Secrets in the config |
+|---|---|---|---|
+| opencode | `leantmcp setup global` (or `project`) | `~/.opencode/opencode.json` with `{file:...}` pointers (opencode's native file substitution) | none — pointers |
+| Claude Code | `leantmcp setup claude-code` | `./.mcp.json` (project scope, merge) — prints the `claude mcp add --scope user` command for user scope | none — bare command |
+| Claude Desktop | `leantmcp setup claude-desktop` | `claude_desktop_config.json` (path per OS), absolute binary path — GUI apps get a limited `PATH` | none — bare command |
+| Cursor | `leantmcp setup cursor` | `~/.cursor/mcp.json` (merge, existing servers preserved) | none — bare command |
+| Codex | `leantmcp setup codex` | appends `[mcp_servers.leantime]` to `~/.codex/config.toml` (once) | none — bare command |
 
-```bash
-cd your-project
-leantmcp setup project
-```
-
-Writes config to `./opencode.json` in the current directory.
-
-Both commands accept `LEANTIME_URL` and `LEANTIME_API_KEY` env vars to skip prompts.
-
-### Claude Desktop
-
-Add to your `claude_desktop_config.json`:
+The config a harness ends up with is simply:
 
 ```json
 {
   "mcpServers": {
     "leantime": {
-      "command": "/path/to/leantmcp",
-      "env": {
-        "LEANTIME_URL": "https://your-instance.leantime.io",
-        "LEANTIME_API_KEY": "lt_xxx..."
-      }
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to your `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "leantime": {
-      "command": "/path/to/leantmcp",
-      "env": {
-        "LEANTIME_URL": "https://your-instance.leantime.io",
-        "LEANTIME_API_KEY": "lt_xxx..."
-      }
+      "command": "/absolute/path/to/leantmcp"
     }
   }
 }
@@ -95,12 +73,7 @@ Add to your `.cursor/mcp.json`:
 
 ### Any other MCP client
 
-`leantmcp` is a standard stdio MCP server. Configure your client to launch the binary with the two environment variables below:
-
-| Variable | Description |
-|----------|-------------|
-| `LEANTIME_URL` | Base URL of your Leantime instance |
-| `LEANTIME_API_KEY` | Leantime API key (see below) |
+`leantmcp` is a standard stdio MCP server: point your client at the binary, no environment variables required (the keyring provides them). `LEANTIME_URL` / `LEANTIME_API_KEY` environment variables remain available as per-run overrides — e.g. targeting a different instance for a test run.
 
 ## Rich text (Markdown)
 
@@ -262,14 +235,13 @@ A `docker-compose.yml` is included to run a disposable local Leantime (pinned to
 
 ```bash
 docker compose up -d
+bash scripts/local-instance-bootstrap.sh   # waits for health, runs the first-run wizard, creates an API key
 ```
 
-1. Open http://localhost:8090 and complete the first-run setup wizard (~2 min)
-2. Create an API key in **Company Settings → API Keys**
-3. Point the MCP at it:
+The bootstrap script prints the API key on its last line — capture it and point the MCP at the local instance:
 
 ```bash
-LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY=lt_xxx... deno task dev
+LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)" deno task dev
 ```
 
 The local instance raises the API rate limit to 120 req/min (Leantime's default of 10 req/min is too low for automated testing).
@@ -278,10 +250,11 @@ The local instance raises the API rate limit to 120 req/min (Leantime's default 
 
 ```bash
 deno task test:unit        # unit + integration (mocked API, no instance needed)
-deno task test             # all tests incl. e2e (read-only; credentials resolve from env or the keyring)
+deno task test             # all tests incl. read-only e2e (credentials resolve from env or the keyring)
+LEANTIME_E2E=local LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY=lt_local... deno task test:e2e:local   # exhaustive e2e (see below)
 ```
 
-End-to-end validation runs against the local instance: create a scratch project, exercise every tool (including the destructive cycles: rejection without `confirm: true`, execution with it), then clean up **only the ids created during the run** — never a sweep.
+The exhaustive local e2e (`tests/e2e/local.test.ts`) is what the CI `local-e2e` job runs on every push: it creates a scratch project on a real instance, exercises the full tool surface (including the destructive cycles: rejection without `confirm: true`, execution with it, and the `deny` policy), then cleans up **only the ids it created** — the helper refuses to delete anything else — and asserts the scratch is left empty. Read-only assertions on live data never pass vacuously: empty results are reported as loud skips, not silent successes.
 
 ## Build
 

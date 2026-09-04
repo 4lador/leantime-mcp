@@ -19,8 +19,9 @@ import {
   writeUrl,
 } from "./keyring.ts";
 import { IS_WINDOWS } from "./keyring.ts";
+import { setupHarnessCommand, type Harness } from "./harness.ts";
 
-const VERSION = "1.4.3";
+const VERSION = "1.5.0";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -30,8 +31,12 @@ USAGE
 
 COMMANDS
   serve              Start the MCP server (default when no command given)
-  setup global       Configure leantime in ~/.opencode/opencode.json
-  setup project      Configure leantime in ./opencode.json
+  setup global       Configure leantime in ~/.opencode/opencode.json ({file:} pointers)
+  setup project      Configure leantime in ./opencode.json (current project)
+  setup claude-code  Write ./.mcp.json (bare command, no secrets)
+  setup claude-desktop  Write claude_desktop_config.json (bare command, no secrets)
+  setup cursor       Write ~/.cursor/mcp.json (bare command, no secrets)
+  setup codex        Append [mcp_servers.leantime] to ~/.codex/config.toml
   key set            Store the API key in ~/.config/leantime/api-key (0600, hidden prompt)
   key show           Show the stored key, masked
   key test           Validate the stored key against the instance
@@ -39,6 +44,9 @@ COMMANDS
   url set <url>      Set the Leantime instance URL (configs with pointers follow automatically)
   url show           Show the resolved instance URL and its source
   doctor             Health check: key file, config, live key validation
+
+All harness configs use a bare command: the binary resolves credentials from
+~/.config/leantime/ at startup — no secrets in any config file.
   --help, -h         Show this help
   --version, -v      Show version
 
@@ -286,8 +294,17 @@ if (import.meta.main) {
     } else if (sub === "project") {
       const target = await setupConfig(false);
       console.log(`✓ Written to ${target}`);
+    } else if (
+      sub === "claude-code" || sub === "claude-desktop" || sub === "cursor" ||
+      sub === "codex"
+    ) {
+      const r = await setupHarnessCommand(sub as Harness);
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
     } else {
-      console.error("Usage: leantmcp setup global|project");
+      console.error(
+        "Usage: leantmcp setup global|project|claude-code|claude-desktop|cursor|codex",
+      );
       Deno.exit(1);
     }
   } else {
