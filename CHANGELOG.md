@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.0 — Secure key management
+
+- `leantmcp key set|show|test` and `leantmcp doctor`: the API key now lives in a single dedicated file (`~/.config/leantime/api-key`, 0600) instead of plaintext configs
+- `setup global/project` writes a native `{file:...}` pointer (opencode file substitution) whenever the stored key matches — no plaintext secret in `opencode.json` — and sets mode 600 on the written config (POSIX)
+- Hidden prompt for `key set` (raw-mode, no echo); key accepted via env var, never via argv
+- Masked display everywhere (`lt_h13…Fc3O`); live key validation via the API
+- Windows: POSIX `chmod`/`stat.mode` are unimplemented in Deno — guarded behind `Deno.build.os`; privacy relies on user-profile ACLs; CI runs a real key-flow (`key set` + `key show`) on a windows-latest runner to catch regressions
+- 13 new unit tests (round-trip without trailing newline, permissions, masking, pointer/fallback, doctor, OS-aware skips)
+
 ## v1.3.1 — Windows support verified
 
 - **Fix**: `setup global` used `HOME`, which is not defined on Windows — falls back to `USERPROFILE`

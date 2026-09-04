@@ -215,6 +215,23 @@ Project hiding/deletion is intentionally not exposed: Leantime's API has no proj
 |------|-------------|
 | `leantime_list_users` | List all users (id, name) — for assignment |
 
+## Key management
+
+The API key never needs to live in plaintext config files:
+
+```bash
+leantmcp key set      # hidden prompt (or LEANTIME_API_KEY env var) → ~/.config/leantime/api-key (0600)
+leantmcp setup global # config then only holds "{file:~/.config/leantime/api-key}"
+leantmcp key show     # masked display (lt_h13…Fc3O)
+leantmcp key test     # live validation against the instance
+leantmcp doctor       # health check: key file, permissions, config, live key
+```
+
+- One secret in one place: the key file has mode 0600 (POSIX) or is protected by the user-profile ACLs (Windows)
+- `setup` writes a native `{file:...}` pointer (opencode substitutes file contents) whenever the stored key matches — no plaintext in `opencode.json`
+- Rotating: create the new key in Leantime, run `leantmcp key set`, delete the old key in Leantime
+- The key is never accepted as a command-line argument (shell history), never logged, and key commands are CLI-only — they are not exposed as MCP tools
+
 ## Getting your Leantime API key
 
 1. Go to your Leantime instance

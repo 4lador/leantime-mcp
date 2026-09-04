@@ -29,6 +29,12 @@ jobs:
         run: deno compile --allow-net --allow-env --allow-read --allow-write --output leantmcp.exe src/main.ts
       - name: Version check
         run: ./leantmcp.exe --version
+      - name: Key flow (regression: chmod crashes on Windows if unguarded)
+        run: |
+          $env:LEANTIME_API_KEY = "lt_ci_dummy_key_0123456789abcdef"
+          ./leantmcp.exe key set
+          ./leantmcp.exe key show
+        shell: pwsh
       - name: MCP handshake smoke test
         run: deno run --allow-run --allow-env scripts/smoke.ts
         env:

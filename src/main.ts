@@ -4,8 +4,17 @@ import { StdioServerTransport } from "@mcp/stdio";
 import { dirname } from "@std/path";
 import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
+import {
+  doctorChecks,
+  keySetCommand,
+  keyShowCommand,
+  keyTestCommand,
+  readKey,
+  secretPath,
+} from "./keyring.ts";
+import { IS_WINDOWS } from "./keyring.ts";
 
-const VERSION = "1.3.1";
+const VERSION = "1.4.0";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -17,17 +26,25 @@ COMMANDS
   serve              Start the MCP server (default when no command given)
   setup global       Configure leantime in ~/.opencode/opencode.json
   setup project      Configure leantime in ./opencode.json
+  key set            Store the API key in ~/.config/leantime/api-key (0600, hidden prompt)
+  key show           Show the stored key, masked
+  key test           Validate the stored key against the instance
+  doctor             Health check: key file, config, live key validation
   --help, -h         Show this help
   --version, -v      Show version
 
 SETUP
+  leantmcp key set
+    Stores the key in a single 0600 file. Set LEANTIME_API_KEY to skip the prompt.
+
   leantmcp setup global
     Prompts for Leantime URL and API key.
     Writes config to ~/.opencode/opencode.json (global).
+    When the key is already stored (key set), the config only gets a
+    {file:...} pointer — no plaintext secret in the config.
 
   leantmcp setup project
-    Prompts for Leantime URL and API key.
-    Writes config to ./opencode.json (current project).
+    Same, but writes ./opencode.json (current project).
 
   Environment variables LEANTIME_URL and LEANTIME_API_KEY can be
   set to skip prompts.
@@ -129,12 +146,32 @@ export async function setupConfig(
 
   leantimeUrl = leantimeUrl.replace(/\/+$/, "");
 
+  // When the key already lives in the secret file, store only a {file:...}
+  // pointer in the config — opencode substitutes file contents natively.
+  const storedKey = await readKey();
+  const apiKeyValue = storedKey === apiKey
+    ? `{file:${secretPath()}}`
+    : apiKey;
+
   const targetPath = getSetupPath(global);
   const existing = await readJsonFile(targetPath);
   const mcpCommand = getMcpCommand();
-  const merged = buildMergedConfig(existing, mcpCommand, leantimeUrl, apiKey);
+  const merged = buildMergedConfig(existing, mcpCommand, leantimeUrl, apiKeyValue);
 
   await writeJsonFile(targetPath, merged);
+  if (!IS_WINDOWS) {
+    try {
+      await Deno.chmod(targetPath, 0o600);
+    } catch {
+      // best effort
+    }
+  }
+  if (apiKeyValue === apiKey) {
+    console.error(
+      `! API key stored in plaintext in ${targetPath}. Run 'leantmcp key set' ` +
+        `first to keep the secret in a single 0600 file and a {file:} pointer here.`,
+    );
+  }
   return targetPath;
 }
 
@@ -174,6 +211,33 @@ if (import.meta.main) {
     showHelp();
   } else if (args[0] === "--version" || args[0] === "-v") {
     showVersion();
+  } else if (args[0] === "key") {
+    const sub = args[1];
+    if (sub === "set") {
+      const r = await keySetCommand();
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
+    } else if (sub === "show") {
+      const r = await keyShowCommand();
+      console.log(r.message);
+      if (!r.ok) Deno.exit(1);
+    } else if (sub === "test") {
+      const r = await keyTestCommand();
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
+    } else {
+      console.error("Usage: leantmcp key set|show|test");
+      Deno.exit(1);
+    }
+  } else if (args[0] === "doctor") {
+    const results = await doctorChecks();
+    let failed = false;
+    for (const c of results) {
+      const icon = c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗";
+      if (c.status === "fail") failed = true;
+      console.log(`${icon} ${c.label}: ${c.detail}`);
+    }
+    if (failed) Deno.exit(1);
   } else if (args[0] === "setup") {
     const sub = args[1];
     if (sub === "global") {
