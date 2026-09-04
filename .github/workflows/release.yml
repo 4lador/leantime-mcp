@@ -48,7 +48,20 @@ jobs:
             --output ${{ matrix.artifact }} \
             src/main.ts
 
+      - name: Checksum
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            HASH="$(powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 '${{ matrix.artifact }}').Hash.ToLower()")"
+          else
+            HASH="$(sha256sum '${{ matrix.artifact }}' | awk '{print $1}')"
+          fi
+          printf '%s  %s\n' "$HASH" "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+          cat "${{ matrix.artifact }}.sha256"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact }}*
+          files: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256

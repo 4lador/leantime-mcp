@@ -66,6 +66,35 @@ main() {
     rm -f "$tmp_dest"
     error "Download failed"
   fi
+
+  # Integrity: verify the published SHA-256 before installing anything.
+  local sha_url="${url}.sha256"
+  local tmp_sha="${INSTALL_DIR}/.leantmcp.sha256.tmp"
+  if ! curl -fsSL "$sha_url" -o "$tmp_sha"; then
+    rm -f "$tmp_dest" "$tmp_sha"
+    error "Could not download the checksum (${sha_url})"
+  fi
+  local expected
+  expected="$(awk '{print $1}' "$tmp_sha")"
+  rm -f "$tmp_sha"
+  if [ -z "$expected" ]; then
+    rm -f "$tmp_dest"
+    error "Checksum file is empty"
+  fi
+  local actual
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp_dest" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$tmp_dest" | awk '{print $1}')"
+  else
+    rm -f "$tmp_dest"
+    error "Neither sha256sum nor shasum is available to verify the checksum"
+  fi
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$tmp_dest"
+    error "Checksum mismatch (expected $expected, got $actual) — download corrupted, aborted"
+  fi
+
   mv -f "$tmp_dest" "$dest"
   chmod +x "$dest"
 

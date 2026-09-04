@@ -32,6 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.sh
 irm https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.ps1 | iex
 ```
 
+Binaries are self-contained (~80-110 MB): they embed the Deno/V8 runtime, so nothing else needs to be installed on the target machine. Both installers verify the published SHA-256 checksum before installing and abort on mismatch.
+
 ## How it works
 
 - `leantmcp` is a **stdio MCP server**: your harness (opencode, Claude Code, Claude Desktop, Cursor, Codex…) spawns it at session start and stops it at session end. No daemon, no port, nothing runs in the background.

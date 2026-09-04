@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.1 — Checksums + binary size transparency
+
+- Release CI publishes a SHA-256 checksum (`.sha256`) next to every platform artifact
+- `install.sh` and `install.ps1` download and verify the checksum before installing anything — a mismatch (corrupted/truncated download) aborts the install cleanly; nothing is written
+- README documents why the binaries are ~80-110 MB: they embed the Deno/V8 runtime so the target machine needs nothing else installed
+
 ## v1.5.0 — Honest docs, exhaustive shipped e2e, harness support
 
 - **Exhaustive local e2e shipped in the repo** (`tests/e2e/local.test.ts`, opt-in via `LEANTIME_E2E=local`): scratch project, full tool surface, assignment enforcement, markdown conversions, scoping regression (a project's tickets can never leak into another), destructive cycles (reject without `confirm`, execute with it, `deny` policy), then cleanup strictly by captured ids — the `deleteCaptured()` helper refuses anything it did not create — and a final emptiness assertion. CI runs it on every push (`local-e2e` job) against the dockerized Leantime
