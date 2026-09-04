@@ -5,6 +5,7 @@
     "jsr:@std/dotenv@0.225": "0.225.6",
     "jsr:@std/internal@^1.0.12": "1.0.13",
     "jsr:@std/path@1": "1.1.4",
+    "jsr:@std/yaml@1.0.5": "1.0.5",
     "npm:@modelcontextprotocol/sdk@*": "1.29.0_zod@3.25.76",
     "npm:zod@*": "3.25.76",
     "npm:zod@3": "3.25.76"
@@ -27,6 +28,9 @@
       "dependencies": [
         "jsr:@std/internal"
       ]
+    },
+    "@std/yaml@1.0.5": {
+      "integrity": "71ba3d334305ee2149391931508b2c293a8490f94a337eef3a09cade1a2a2742"
     }
   },
   "npm": {

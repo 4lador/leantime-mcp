@@ -224,12 +224,13 @@ leantmcp key set      # hidden prompt (or LEANTIME_API_KEY env var) → ~/.confi
 leantmcp setup global # config then only holds "{file:~/.config/leantime/api-key}"
 leantmcp key show     # masked display (lt_h13…Fc3O)
 leantmcp key test     # live validation against the instance
+leantmcp key rotate   # mint a new key (same role), verify it live, replace the stored one
 leantmcp doctor       # health check: key file, permissions, config, live key
 ```
 
 - One secret in one place: the key file has mode 0600 (POSIX) or is protected by the user-profile ACLs (Windows)
 - `setup` writes a native `{file:...}` pointer (opencode substitutes file contents) whenever the stored key matches — no plaintext in `opencode.json`
-- Rotating: create the new key in Leantime, run `leantmcp key set`, delete the old key in Leantime
+- Rotating: `leantmcp key rotate [--name X]` mints a new key with the same role via the API, verifies it live before replacing the stored one, then instructs you to delete the old key in the Leantime UI (the API has no key-deletion method). On any failure the previous key is left untouched.
 - The key is never accepted as a command-line argument (shell history), never logged, and key commands are CLI-only — they are not exposed as MCP tools
 
 ## Getting your Leantime API key

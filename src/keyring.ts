@@ -227,6 +227,87 @@ export interface CheckResult {
   detail: string;
 }
 
+/** `leantime key rotate` — mint a new key with the same role, verify it live
+ * BEFORE replacing anything, then store it. The old key must be deleted
+ * manually in the Leantime UI (no delete method exists in the API). */
+export async function keyRotateCommand(
+  options?: { name?: string; fetchFn?: FetchFn },
+): Promise<CommandResult> {
+  const currentKey = await readKey();
+  if (!currentKey) {
+    return {
+      ok: false,
+      message: `No key file at ${secretPath()}. Run: leantmcp key set`,
+    };
+  }
+  const url = await resolveUrl();
+  if (!url) {
+    return {
+      ok: false,
+      message: "No LEANTIME_URL (env or global opencode config) to rotate against.",
+    };
+  }
+
+  const client = new LeantimeClient(url, currentKey, options?.fetchFn);
+
+  // Identify the current key's entry to preserve its role.
+  // Key format is lt_{user}_{password}; getAPIKeys masks usernames to 5 chars.
+  const userSegment = currentKey.replace(/^lt_/, "").split("_")[0];
+  const keys = await client.call<
+    { id: unknown; username?: string; role?: string }[]
+  >("Api.getAPIKeys", {});
+  const entry = (keys ?? []).find((k) =>
+    userSegment.startsWith(String(k.username ?? "").slice(0, 5))
+  );
+  if (!entry) {
+    return {
+      ok: false,
+      message:
+        "Could not identify the current key in the instance's API key list — rotation aborted.",
+    };
+  }
+
+  const name = options?.name ?? `MCP-rotated-${new Date().toISOString().slice(0, 10)}`;
+  // source: "api" is REQUIRED — the service alone does not set it, and without
+  // it the created key is rejected at authentication (401). Only the web UI
+  // controller sets it; we must pass it explicitly.
+  const created = await client.call<
+    { user?: string; passwordClean?: string; password?: string } | false
+  >(
+    "Api.createAPIKey",
+    { values: { firstname: name, role: entry.role, source: "api" } },
+  );
+  if (!created || !created.user) {
+    return {
+      ok: false,
+      message: "Key creation failed on the instance — rotation aborted.",
+    };
+  }
+  // The secret only ever exists in this process's memory.
+  const newKey = `lt_${created.user}_${created.passwordClean ?? created.password}`;
+
+  // Verify the new key live BEFORE touching the stored one.
+  const live = await testKey(url, newKey, options?.fetchFn);
+  if (!live.ok) {
+    return {
+      ok: false,
+      message:
+        `New key verification failed (${live.message}) — rotation aborted, ` +
+        "the previous key is untouched.",
+    };
+  }
+
+  const oldMasked = maskKey(currentKey);
+  await writeKey(newKey);
+  return {
+    ok: true,
+    message:
+      `Key rotated: ${maskKey(newKey)} (role ${entry.role}, name "${name}") stored at ${secretPath()}.\n` +
+      `Update any other consumers that embed the old key (e.g. .env, CI secrets).\n` +
+      `Now delete the old key ${oldMasked} in the Leantime UI (Company Settings → API Keys).`,
+  };
+}
+
 /** `leantmcp doctor` — collect all health checks without exiting. */
 export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
   const results: CheckResult[] = [];

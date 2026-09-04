@@ -51,6 +51,14 @@ export function createMockFetch(handler?: Partial<Record<string, RpcHandler>>) {
     "leantime.rpc.tickets.getTicketTypes": () => RPC_OK({ task: "Task", story: "Story", bug: "Bug" }),
     "leantime.rpc.sprints.getAllSprints": () => RPC_OK(SPRINTS),
     "leantime.rpc.users.getAll": () => RPC_OK(USERS),
+    "leantime.rpc.Api.getAPIKeys": () =>
+      RPC_OK([{ id: 3, username: "testu", role: "20", firstname: "MCP" }]),
+    "leantime.rpc.Api.createAPIKey": () =>
+      RPC_OK({
+        id: 5,
+        user: "nEwUsEr12345678901234567890ab",
+        passwordClean: "pAsSwOrD12345678901234567890ab",
+      }),
     "leantime.rpc.Clients.getAll": () => RPC_OK(CLIENTS),
     "leantime.rpc.comments.getComments": (_m, params) =>
       RPC_OK(COMMENTS.filter((c) => String(c.moduleId) === String(params.entityId))),

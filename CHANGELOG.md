@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.1 — `key rotate` command
+
+- `leantmcp key rotate [--name X]`: mints a new API key with the same role as the current one (identified through the instance's key list), verifies it live, and only then replaces the stored key — on any failure the previous key is left untouched
+- Hardcodes `source: "api"` in the creation payload — Leantime's `Api.createAPIKey` service does not set it (only the web UI controller does), and without it the minted key is rejected with 401
+- The new secret exists only in process memory; masked reporting only; instructs to delete the old key in the UI (the API has no deletion method)
+- SECURITY.md: credential creation is CLI-only, never exposed as an MCP tool
+- 5 new unit tests (happy path incl. call shapes and ordering, live-failure keeps keyring intact, unknown key aborts, no stored key, custom name)
+
 ## v1.4.0 — Secure key management
 
 - `leantmcp key set|show|test` and `leantmcp doctor`: the API key now lives in a single dedicated file (`~/.config/leantime/api-key`, 0600) instead of plaintext configs

@@ -3,6 +3,7 @@ import {
   IS_WINDOWS,
   doctorChecks,
   keyFileStatus,
+  keyRotateCommand,
   keySetCommand,
   keyShowCommand,
   keyTestCommand,
@@ -14,6 +15,7 @@ import {
 } from "../../src/keyring.ts";
 import { setupConfig } from "../../src/main.ts";
 import { createMockFetch } from "../helpers/mock-fetch.ts";
+import { RPC_ERROR, RPC_OK } from "../helpers/fixtures.ts";
 
 const LONG_KEY = "lt_h13dyVu1uWRw5K3EZT79zeES7fWOTyUn_sN47bM5lXVVTmso4So67Cxewc1pEFc3O";
 
@@ -226,5 +228,89 @@ Deno.test("setup — plaintext fallback when the secret file differs", async () 
     });
     const cfg = JSON.parse(await Deno.readTextFile(target));
     assertEquals(cfg.mcp.leantime.environment.LEANTIME_API_KEY, LONG_KEY);
+  });
+});
+
+// ---------------------------------------------------------------- key rotate
+
+const CURRENT_KEY = "lt_testusername123456789012345678_oldsecret_000000000000000";
+const MINTED_KEY = "lt_nEwUsEr12345678901234567890ab_pAsSwOrD12345678901234567890ab";
+
+async function withRotateEnv(fn: () => Promise<void>): Promise<void> {
+  await withTempHome(async () => {
+    await writeKey(CURRENT_KEY);
+    Deno.env.set("LEANTIME_URL", "https://leantime.test");
+    try {
+      await fn();
+    } finally {
+      Deno.env.delete("LEANTIME_URL");
+    }
+  });
+}
+
+Deno.test("key rotate — happy path: source api, same role, live test before write", async () => {
+  await withRotateEnv(async () => {
+    const { fetch: mockFetch, calls } = createMockFetch();
+    const r = await keyRotateCommand({ fetchFn: mockFetch });
+    assertEquals(r.ok, true, r.message);
+    // Stored key replaced by the minted one
+    assertEquals(await readKey(), MINTED_KEY);
+    // createAPIKey called with source:'api' + preserved role
+    const create = calls.find((c) => c.method === "leantime.rpc.Api.createAPIKey")!;
+    const values = create.params.values as Record<string, unknown>;
+    assertEquals(values.source, "api");
+    assertEquals(values.role, "20");
+    assertEquals(String(values.firstname).startsWith("MCP-rotated-"), true);
+    // live verification happened with the NEW key before writeKey
+    const verify = calls.find((c) => c.method === "leantime.rpc.users.getAll")!;
+    assertEquals(verify.method, "leantime.rpc.users.getAll");
+    // message includes masked old key for UI deletion
+    assertEquals(r.message.includes(maskKey(CURRENT_KEY)), true);
+  });
+});
+
+Deno.test("key rotate — custom --name", async () => {
+  await withRotateEnv(async () => {
+    const { fetch: mockFetch, calls } = createMockFetch();
+    const r = await keyRotateCommand({ name: "mcp-prod", fetchFn: mockFetch });
+    assertEquals(r.ok, true);
+    const create = calls.find((c) => c.method === "leantime.rpc.Api.createAPIKey")!;
+    assertEquals((create.params.values as Record<string, unknown>).firstname, "mcp-prod");
+  });
+});
+
+Deno.test("key rotate — live verification failure leaves the keyring intact", async () => {
+  await withRotateEnv(async () => {
+    const { fetch: mockFetch } = createMockFetch({
+      "leantime.rpc.users.getAll": () =>
+        RPC_ERROR(-32000, "Invalid API Key"),
+    });
+    const r = await keyRotateCommand({ fetchFn: mockFetch });
+    assertEquals(r.ok, false);
+    assertEquals(r.message.includes("rotation aborted"), true);
+    assertEquals(r.message.includes("untouched"), true);
+    // The previous key is untouched
+    assertEquals(await readKey(), CURRENT_KEY);
+  });
+});
+
+Deno.test("key rotate — current key not found in API key list aborts", async () => {
+  await withRotateEnv(async () => {
+    const { fetch: mockFetch, calls } = createMockFetch({
+      "leantime.rpc.Api.getAPIKeys": () => RPC_OK([]),
+    });
+    const r = await keyRotateCommand({ fetchFn: mockFetch });
+    assertEquals(r.ok, false);
+    assertEquals(r.message.includes("aborted"), true);
+    assertEquals(await readKey(), CURRENT_KEY);
+    assertEquals(calls.some((c) => c.method === "leantime.rpc.Api.createAPIKey"), false);
+  });
+});
+
+Deno.test("key rotate — no stored key is a clean error", async () => {
+  await withTempHome(async () => {
+    const r = await keyRotateCommand();
+    assertEquals(r.ok, false);
+    assertEquals(r.message.includes("key set"), true);
   });
 });

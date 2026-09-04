@@ -6,6 +6,7 @@ import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 import {
   doctorChecks,
+  keyRotateCommand,
   keySetCommand,
   keyShowCommand,
   keyTestCommand,
@@ -14,7 +15,7 @@ import {
 } from "./keyring.ts";
 import { IS_WINDOWS } from "./keyring.ts";
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -29,6 +30,7 @@ COMMANDS
   key set            Store the API key in ~/.config/leantime/api-key (0600, hidden prompt)
   key show           Show the stored key, masked
   key test           Validate the stored key against the instance
+  key rotate         Mint a new key (same role), verify it live, replace the stored one
   doctor             Health check: key file, config, live key validation
   --help, -h         Show this help
   --version, -v      Show version
@@ -225,8 +227,14 @@ if (import.meta.main) {
       const r = await keyTestCommand();
       console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
       if (!r.ok) Deno.exit(1);
+    } else if (sub === "rotate") {
+      const nameFlag = args.indexOf("--name");
+      const name = nameFlag !== -1 ? args[nameFlag + 1] : undefined;
+      const r = await keyRotateCommand({ name });
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
     } else {
-      console.error("Usage: leantmcp key set|show|test");
+      console.error("Usage: leantmcp key set|show|test|rotate");
       Deno.exit(1);
     }
   } else if (args[0] === "doctor") {
