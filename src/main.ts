@@ -5,7 +5,7 @@ import { dirname } from "@std/path";
 import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -70,7 +70,9 @@ export async function writeJsonFile(path: string, data: unknown): Promise<void> 
 
 export function getSetupPath(global: boolean): string {
   if (global) {
-    return `${Deno.env.get("HOME")}/.opencode/opencode.json`;
+    // HOME is not defined on Windows — fall back to USERPROFILE.
+    const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
+    return `${home}/.opencode/opencode.json`;
   }
   return `${Deno.cwd()}/opencode.json`;
 }

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit & integration tests
+        run: deno task test:unit
+
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit & integration tests (Windows runtime)
+        run: deno task test:unit
+      - name: Compile native Windows binary
+        run: deno compile --allow-net --allow-env --allow-read --allow-write --output leantmcp.exe src/main.ts
+      - name: Version check
+        run: ./leantmcp.exe --version
+      - name: MCP handshake smoke test
+        run: deno run --allow-run --allow-env scripts/smoke.ts
+        env:
+          LEANTMCP_BIN: ./leantmcp.exe

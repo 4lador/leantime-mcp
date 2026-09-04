@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { readJsonFile, writeJsonFile, buildMergedConfig, getMcpCommand, SetupError } from "../../src/main.ts";
+import { readJsonFile, writeJsonFile, buildMergedConfig, getMcpCommand, getSetupPath, SetupError } from "../../src/main.ts";
 
 Deno.test("readJsonFile — reads valid JSON", async () => {
   const path = await Deno.makeTempFile({ suffix: ".json" });
@@ -102,4 +102,27 @@ Deno.test("getMcpCommand — returns array", () => {
   const cmd = getMcpCommand();
   assertEquals(Array.isArray(cmd), true);
   assertEquals(cmd.length > 0, true);
+});
+
+Deno.test("getSetupPath — global uses HOME when defined", () => {
+  const hadHome = Deno.env.get("HOME");
+  try {
+    Deno.env.set("HOME", "/home/testuser");
+    assertEquals(getSetupPath(true), "/home/testuser/.opencode/opencode.json");
+  } finally {
+    if (hadHome !== undefined) Deno.env.set("HOME", hadHome);
+  }
+});
+
+Deno.test("getSetupPath — global falls back to USERPROFILE when HOME is unset (Windows)", () => {
+  const hadHome = Deno.env.get("HOME");
+  const hadProfile = Deno.env.get("USERPROFILE");
+  try {
+    Deno.env.delete("HOME");
+    Deno.env.set("USERPROFILE", "C:\\Users\\testuser");
+    assertEquals(getSetupPath(true), "C:\\Users\\testuser/.opencode/opencode.json");
+  } finally {
+    if (hadHome !== undefined) Deno.env.set("HOME", hadHome);
+    if (hadProfile !== undefined) Deno.env.set("USERPROFILE", hadProfile);
+  }
 });

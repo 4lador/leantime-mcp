@@ -35,7 +35,16 @@ $dest = Join-Path $InstallDir "$BinaryName.exe"
 
 Write-Info "Downloading $url..."
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Invoke-WebRequest -Uri $url -OutFile $dest
+# Download to a temp file first: writing directly over a running executable
+# fails on Windows (the file is locked while the MCP server is running).
+$tmpDest = "$dest.tmp"
+try {
+    Invoke-WebRequest -Uri $url -OutFile $tmpDest
+    Move-Item -Force -Path $tmpDest -Destination $dest
+} catch {
+    if (Test-Path $tmpDest) { Remove-Item -Force $tmpDest }
+    Write-Err "Download or install failed: $_"
+}
 
 Write-Info "Installed $BinaryName $version to $dest"
 

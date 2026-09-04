@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.1 — Windows support verified
+
+- **Fix**: `setup global` used `HOME`, which is not defined on Windows — falls back to `USERPROFILE`
+- **Fix**: `install.ps1` now downloads to a temp file and moves it into place (Windows locks a running executable — direct overwrite failed while the MCP server was running)
+- **CI**: new workflow (`ci.yml`) — unit tests on Linux, plus a `windows-latest` job that runs the test suite on Windows, compiles a native binary and performs an MCP handshake smoke test (`scripts/smoke.ts`, tool list checked against the registry)
+- `SECURITY.md` (private vulnerability reporting, scope, security-relevant design) and a no-warranty/backup notice in the README
+- Docs: CHANGELOG created, rich-text section covers comments and project details, test workflow documented
+
 ## v1.3.0 — Feature-complete Core PM (37 tools)
 
 - **Comments**: list / add / update / delete on tickets (Markdown converted to rich HTML; `add` recovers from Leantime v3.7.3's post-insert notification crash over JSON-RPC)

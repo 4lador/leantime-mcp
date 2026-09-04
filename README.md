@@ -131,6 +131,8 @@ If neither is provided, the server rejects the call with an error instructing th
 
 ## Safety: destructive operations
 
+This software is provided without warranty (MIT). It drives Leantime with your API key on your behalf — **back up your Leantime data** before letting agents operate on it.
+
 The delete tools (`leantime_delete_ticket`, `leantime_delete_milestone`, `leantime_delete_comment`, `leantime_delete_timesheet_entry`) are gated behind an explicit confirmation:
 
 - by default (`ask`), they refuse to run unless called with `confirm: true` — the tool error instructs the agent to obtain the user's explicit approval first and to retry;
