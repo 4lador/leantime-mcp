@@ -59,7 +59,14 @@ main() {
 
   info "Downloading ${url}..."
   mkdir -p "$INSTALL_DIR"
-  curl -fsSL "$url" -o "$dest"
+  # Download to a temp file first: writing directly over a running binary
+  # fails with ETXTBSY (and on Windows the file is locked).
+  local tmp_dest="${INSTALL_DIR}/.leantmcp.tmp"
+  if ! curl -fsSL "$url" -o "$tmp_dest"; then
+    rm -f "$tmp_dest"
+    error "Download failed"
+  fi
+  mv -f "$tmp_dest" "$dest"
   chmod +x "$dest"
 
   info "Installed ${BINARY_NAME} v${version} to ${dest}"
