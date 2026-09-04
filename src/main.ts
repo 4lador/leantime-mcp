@@ -163,28 +163,32 @@ async function serve(): Promise<void> {
   await server.connect(transport);
 }
 
-const args = Deno.args;
+// CLI dispatch — only when run as the entrypoint (deno run / compiled binary),
+// never when imported (e.g. by tests).
+if (import.meta.main) {
+  const args = Deno.args;
 
-if (args.length === 0 || args[0] === "serve") {
-  await serve();
-} else if (args[0] === "--help" || args[0] === "-h") {
-  showHelp();
-} else if (args[0] === "--version" || args[0] === "-v") {
-  showVersion();
-} else if (args[0] === "setup") {
-  const sub = args[1];
-  if (sub === "global") {
-    const target = await setupConfig(true);
-    console.log(`✓ Written to ${target}`);
-  } else if (sub === "project") {
-    const target = await setupConfig(false);
-    console.log(`✓ Written to ${target}`);
+  if (args.length === 0 || args[0] === "serve") {
+    await serve();
+  } else if (args[0] === "--help" || args[0] === "-h") {
+    showHelp();
+  } else if (args[0] === "--version" || args[0] === "-v") {
+    showVersion();
+  } else if (args[0] === "setup") {
+    const sub = args[1];
+    if (sub === "global") {
+      const target = await setupConfig(true);
+      console.log(`✓ Written to ${target}`);
+    } else if (sub === "project") {
+      const target = await setupConfig(false);
+      console.log(`✓ Written to ${target}`);
+    } else {
+      console.error("Usage: leantmcp setup global|project");
+      Deno.exit(1);
+    }
   } else {
-    console.error("Usage: leantmcp setup global|project");
+    console.error(`Unknown command: ${args[0]}`);
+    showHelp();
     Deno.exit(1);
   }
-} else {
-  console.error(`Unknown command: ${args[0]}`);
-  showHelp();
-  Deno.exit(1);
 }
