@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   IS_WINDOWS,
   doctorChecks,
+  instanceUrlPath,
   keyFileStatus,
   keyRotateCommand,
   keySetCommand,
@@ -9,8 +10,15 @@ import {
   keyTestCommand,
   maskKey,
   readKey,
+  readUrl,
+  resolveServerEnv,
+  resolveUrl,
+  resolveUrlDetailed,
   secretPath,
+  urlSetCommand,
+  urlShowCommand,
   writeKey,
+  writeUrl,
   fileMode,
 } from "../../src/keyring.ts";
 import { setupConfig } from "../../src/main.ts";
@@ -197,10 +205,12 @@ Deno.test("setup — writes a {file:} pointer when the secret matches", async ()
     const cfg = JSON.parse(await Deno.readTextFile(target));
     const env = cfg.mcp.leantime.environment;
     assertEquals(env.LEANTIME_API_KEY, `{file:${secretPath()}}`);
-    assertEquals(env.LEANTIME_URL, "https://leantime.test");
+    assertEquals(env.LEANTIME_URL, `{file:${instanceUrlPath()}}`);
     // No plaintext secret in the config
     const raw = await Deno.readTextFile(target);
     assertEquals(raw.includes(LONG_KEY), false);
+    // URL persisted to the keyring dir (single source of truth)
+    assertEquals(await readUrl(), "https://leantime.test");
   });
 });
 
@@ -261,11 +271,29 @@ Deno.test("key rotate — happy path: source api, same role, live test before wr
     assertEquals(values.source, "api");
     assertEquals(values.role, "20");
     assertEquals(String(values.firstname).startsWith("MCP-rotated-"), true);
+    // Project assignments copied from the old key onto the new one
+    const rel = calls.find((c) => c.method === "leantime.rpc.Projects.editUserProjectRelations")!;
+    assertEquals(rel.params.id, "5"); // new key user id from createAPIKey
+    assertEquals(rel.params.projects, ["3", "4"]); // old key's projects (fixture)
+    assertEquals(r.message.includes("WARNING: could not copy project"), false);
     // live verification happened with the NEW key before writeKey
     const verify = calls.find((c) => c.method === "leantime.rpc.users.getAll")!;
     assertEquals(verify.method, "leantime.rpc.users.getAll");
     // message includes masked old key for UI deletion
     assertEquals(r.message.includes(maskKey(CURRENT_KEY)), true);
+  });
+});
+
+Deno.test("key rotate — project relation copy failure warns but rotates", async () => {
+  await withRotateEnv(async () => {
+    const { fetch: mockFetch } = createMockFetch({
+      "leantime.rpc.Projects.editUserProjectRelations": () =>
+        RPC_ERROR(-32000, "Not authorized"),
+    });
+    const r = await keyRotateCommand({ fetchFn: mockFetch });
+    assertEquals(r.ok, true);
+    assertEquals(r.message.includes("WARNING: could not copy project"), true);
+    assertEquals(await readKey(), MINTED_KEY);
   });
 });
 
@@ -313,4 +341,202 @@ Deno.test("key rotate — no stored key is a clean error", async () => {
     assertEquals(r.ok, false);
     assertEquals(r.message.includes("key set"), true);
   });
+});
+
+// ---------------------------------------------------------------- v1.4.2: url store & unified resolution
+
+Deno.test("url — writeUrl/readUrl round-trip, slashes and newline stripped", async () => {
+  await withTempHome(async () => {
+    assertEquals(await writeUrl("https://leantime.test///\n"), instanceUrlPath());
+    assertEquals(await readUrl(), "https://leantime.test");
+    assertEquals(await Deno.readTextFile(instanceUrlPath()), "https://leantime.test");
+  });
+});
+
+Deno.test("url — resolveUrlDetailed order: env > keyring file > legacy config", async () => {
+  const hadEnv = Deno.env.get("LEANTIME_URL");
+  await withTempHome(async () => {
+    // 1. keyring file
+    await writeUrl("https://from-file.leantime.test");
+    const fromFile = (await resolveUrlDetailed())!;
+    assertEquals(fromFile.url, "https://from-file.leantime.test");
+    assertEquals(fromFile.source, "keyring");
+    // 2. env wins
+    Deno.env.set("LEANTIME_URL", "https://from-env.leantime.test");
+    try {
+      const fromEnv = (await resolveUrlDetailed())!;
+      assertEquals(fromEnv.url, "https://from-env.leantime.test");
+      assertEquals(fromEnv.source, "env");
+    } finally {
+      if (hadEnv !== undefined) Deno.env.set("LEANTIME_URL", hadEnv);
+      else Deno.env.delete("LEANTIME_URL");
+    }
+  });
+});
+
+Deno.test("url — legacy config fallback works, pointer-only config is ignored", async () => {
+  const hadEnv = Deno.env.get("LEANTIME_URL");
+  if (hadEnv !== undefined) Deno.env.delete("LEANTIME_URL");
+  const original = Deno.env.get("HOME");
+  const tmp = await Deno.makeTempDir();
+  Deno.env.set("HOME", tmp);
+  try {
+    // No keyring file, config with plaintext URL → source config
+    await Deno.mkdir(`${tmp}/.opencode`, { recursive: true });
+    await Deno.writeTextFile(
+      `${tmp}/.opencode/opencode.json`,
+      JSON.stringify({ mcp: { leantime: { environment: { LEANTIME_URL: "https://legacy.leantime.test/" } } } }),
+    );
+    const legacy = (await resolveUrlDetailed())!;
+    assertEquals(legacy.url, "https://legacy.leantime.test");
+    assertEquals(legacy.source, "config");
+
+    // Config holding only a pointer → useless as URL, resolution returns null
+    await Deno.writeTextFile(
+      `${tmp}/.opencode/opencode.json`,
+      JSON.stringify({ mcp: { leantime: { environment: { LEANTIME_URL: "{file:/some/path}" } } } }),
+    );
+    assertEquals(await resolveUrlDetailed(), null);
+    assertEquals(await resolveUrl(), null);
+  } finally {
+    if (original !== undefined) Deno.env.set("HOME", original);
+    else Deno.env.delete("HOME");
+    if (hadEnv !== undefined) Deno.env.set("LEANTIME_URL", hadEnv);
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("resolveServerEnv — env wins, then keyring fallback, then explicit missing", async () => {
+  const hadUrl = Deno.env.get("LEANTIME_URL");
+  const hadKey = Deno.env.get("LEANTIME_API_KEY");
+  Deno.env.delete("LEANTIME_URL");
+  Deno.env.delete("LEANTIME_API_KEY");
+  try {
+    await withTempHome(async () => {
+      // Nothing anywhere
+      const none = await resolveServerEnv();
+      assertEquals(none.ok, false);
+      assertEquals((none as { missing: string[] }).missing.sort(), ["LEANTIME_API_KEY", "LEANTIME_URL"]);
+
+      // Keyring fallback for both
+      await writeUrl("https://keyring.leantime.test");
+      await writeKey(LONG_KEY);
+      const fromKeyring = await resolveServerEnv();
+      assertEquals(fromKeyring.ok, true);
+      assertEquals((fromKeyring as { url: string }).url, "https://keyring.leantime.test");
+      assertEquals((fromKeyring as { apiKey: string }).apiKey, LONG_KEY);
+
+      // Env override wins
+      Deno.env.set("LEANTIME_URL", "https://override.leantime.test");
+      Deno.env.set("LEANTIME_API_KEY", "lt_env_override");
+      try {
+        const fromEnv = await resolveServerEnv();
+        assertEquals((fromEnv as { url: string }).url, "https://override.leantime.test");
+        assertEquals((fromEnv as { apiKey: string }).apiKey, "lt_env_override");
+      } finally {
+        Deno.env.delete("LEANTIME_URL");
+        Deno.env.delete("LEANTIME_API_KEY");
+      }
+    });
+  } finally {
+    if (hadUrl !== undefined) Deno.env.set("LEANTIME_URL", hadUrl);
+    if (hadKey !== undefined) Deno.env.set("LEANTIME_API_KEY", hadKey);
+  }
+});
+
+Deno.test("url set — argv input, live key verification, pointer-follow note", async () => {
+  await withTempHome(async () => {
+    await writeKey(LONG_KEY);
+    Deno.env.delete("LEANTIME_URL");
+    const { fetch: mockFetch } = createMockFetch();
+    const r = await urlSetCommand("https://new-instance.leantime.test", mockFetch);
+    assertEquals(r.ok, true, r.message);
+    assertEquals(await readUrl(), "https://new-instance.leantime.test");
+    assertEquals(r.message.includes("verified against the new instance"), true);
+    assertEquals(r.message.includes("follow automatically"), true);
+  });
+});
+
+Deno.test("url set — failed key verification warns but still stores", async () => {
+  await withTempHome(async () => {
+    await writeKey(LONG_KEY);
+    const failing = async () =>
+      new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Invalid API Key" },
+        id: 1,
+      }), { status: 200 });
+    const r = await urlSetCommand("https://other-instance.leantime.test", failing);
+    assertEquals(r.ok, true);
+    assertEquals(r.message.includes("WARNING"), true);
+    assertEquals(r.message.includes("key set"), true);
+  });
+});
+
+Deno.test("url set — no input is a clean error", async () => {
+  await withTempHome(async () => {
+    const hadEnv = Deno.env.get("LEANTIME_URL");
+    if (hadEnv !== undefined) Deno.env.delete("LEANTIME_URL");
+    try {
+      const r = await urlSetCommand();
+      assertEquals(r.ok, false);
+    } finally {
+      if (hadEnv !== undefined) Deno.env.set("LEANTIME_URL", hadEnv);
+    }
+  });
+});
+
+Deno.test("url show — displays resolved URL with its source", async () => {
+  await withTempHome(async () => {
+    await writeUrl("https://shown.leantime.test");
+    const hadEnv = Deno.env.get("LEANTIME_URL");
+    if (hadEnv !== undefined) Deno.env.delete("LEANTIME_URL");
+    try {
+      const r = await urlShowCommand();
+      assertEquals(r.ok, true);
+      assertEquals(r.message.includes("https://shown.leantime.test"), true);
+      assertEquals(r.message.includes("keyring"), true);
+    } finally {
+      if (hadEnv !== undefined) Deno.env.set("LEANTIME_URL", hadEnv);
+    }
+  });
+});
+
+Deno.test("doctor — .env drift is detected (mismatch vs duplicate)", async () => {
+  const originalCwd = Deno.cwd();
+  const tmp = await Deno.makeTempDir();
+  const originalHome = Deno.env.get("HOME");
+  const hadUrl = Deno.env.get("LEANTIME_URL");
+  Deno.env.set("HOME", tmp);
+  Deno.env.delete("LEANTIME_URL");
+  try {
+    await writeKey(LONG_KEY);
+    await writeUrl("https://leantime.test");
+
+    // Stale copy in the cwd .env
+    Deno.chdir(tmp);
+    await Deno.writeTextFile(`${tmp}/.env`, "LEANTIME_API_KEY=lt_a_stale_different_key\n");
+    const drift = await doctorChecks();
+    const staleCheck = drift.find((c) => c.label === ".env key copy")!;
+    assertEquals(staleCheck.status, "warn");
+    assertEquals(staleCheck.detail.includes("DIFFERENT"), true);
+
+    // Exact duplicate
+    await Deno.writeTextFile(`${tmp}/.env`, `LEANTIME_API_KEY=${LONG_KEY}\n`);
+    const dup = await doctorChecks();
+    const dupCheck = dup.find((c) => c.label === ".env key copy")!;
+    assertEquals(dupCheck.status, "warn");
+    assertEquals(dupCheck.detail.includes("duplicate"), true);
+
+    // No .env at all — no check fired
+    await Deno.remove(`${tmp}/.env`);
+    const clean = await doctorChecks();
+    assertEquals(clean.find((c) => c.label === ".env key copy"), undefined);
+  } finally {
+    Deno.chdir(originalCwd);
+    if (originalHome !== undefined) Deno.env.set("HOME", originalHome);
+    else Deno.env.delete("HOME");
+    if (hadUrl !== undefined) Deno.env.set("LEANTIME_URL", hadUrl);
+    await Deno.remove(tmp, { recursive: true });
+  }
 });

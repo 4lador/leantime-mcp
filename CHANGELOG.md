@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.2 — Unified configuration, no plaintext anywhere
+
+- The instance URL now lives beside the key in `~/.config/leantime/instance-url` — a single source of truth for both credentials; `leantmcp setup` writes TWO `{file:...}` pointers (URL + key) into the configs, which therefore contain no secrets at all and are safe to commit as-is
+- New commands: `leantmcp url set <url>` (argument allowed — not a secret; live-verifies the stored key against the new instance, warns about legacy plaintext configs) and `leantmcp url show` (resolved URL + source). Changing instances updates every pointer-based config automatically
+- `serve()` and the e2e suite resolve credentials as env > dotenv (.env legacy/override) > keyring files — a `.env` is no longer needed for development
+- `doctor` upgrades: URL check with source, expects both pointers in the config, and detects key copies in a cwd `.env` (stale → strong warning; duplicate → removal hint)
+- CI windows-latest gains a URL-flow step next to the key-flow (regression guard with the compiled binary)
+- 9 new unit tests (URL store, resolution order incl. pointer-ignoring config fallback, server env resolution, url set/show, doctor drift detection via chdir)
+
 ## v1.4.1 — `key rotate` command
 
 - `leantmcp key rotate [--name X]`: mints a new API key with the same role as the current one (identified through the instance's key list), verifies it live, and only then replaces the stored key — on any failure the previous key is left untouched

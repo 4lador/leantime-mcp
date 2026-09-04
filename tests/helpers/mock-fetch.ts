@@ -59,6 +59,8 @@ export function createMockFetch(handler?: Partial<Record<string, RpcHandler>>) {
         user: "nEwUsEr12345678901234567890ab",
         passwordClean: "pAsSwOrD12345678901234567890ab",
       }),
+    "leantime.rpc.Projects.getProjectsAssignedToUser": () => RPC_OK(PROJECTS),
+    "leantime.rpc.Projects.editUserProjectRelations": () => RPC_OK(true),
     "leantime.rpc.Clients.getAll": () => RPC_OK(CLIENTS),
     "leantime.rpc.comments.getComments": (_m, params) =>
       RPC_OK(COMMENTS.filter((c) => String(c.moduleId) === String(params.entityId))),

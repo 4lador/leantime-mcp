@@ -217,20 +217,23 @@ Project hiding/deletion is intentionally not exposed: Leantime's API has no proj
 
 ## Key management
 
-The API key never needs to live in plaintext config files:
+Configuration lives in one place — `~/.config/leantime/` (`api-key`, 0600, and `instance-url`). The opencode configs only hold `{file:...}` pointers, so they contain no secrets and are safe to commit as-is.
 
 ```bash
+leantmcp url set https://your-instance.leantime.io   # instance URL (argument OK — not a secret)
+leantmcp url show                                     # resolved URL + where it comes from
 leantmcp key set      # hidden prompt (or LEANTIME_API_KEY env var) → ~/.config/leantime/api-key (0600)
-leantmcp setup global # config then only holds "{file:~/.config/leantime/api-key}"
+leantmcp setup global # config then only holds "{file:...}" pointers
 leantmcp key show     # masked display (lt_h13…Fc3O)
 leantmcp key test     # live validation against the instance
 leantmcp key rotate   # mint a new key (same role), verify it live, replace the stored one
 leantmcp doctor       # health check: key file, permissions, config, live key
 ```
 
-- One secret in one place: the key file has mode 0600 (POSIX) or is protected by the user-profile ACLs (Windows)
-- `setup` writes a native `{file:...}` pointer (opencode substitutes file contents) whenever the stored key matches — no plaintext in `opencode.json`
-- Rotating: `leantmcp key rotate [--name X]` mints a new key with the same role via the API, verifies it live before replacing the stored one, then instructs you to delete the old key in the Leantime UI (the API has no key-deletion method). On any failure the previous key is left untouched.
+- One secret in one place: the key file has mode 0600 (POSIX) or is protected by the user-profile ACLs (Windows); the URL lives in a sibling file — changing instances (`leantmcp url set`) updates every pointer-based config automatically
+- `setup` writes native `{file:...}` pointers (opencode substitutes file contents) whenever the stored key matches — no plaintext in `opencode.json`
+- Rotating: `leantmcp key rotate` (same role, live-verified before replacing anything), then delete the old key in the Leantime UI
+- Environment variables (`LEANTIME_URL`, `LEANTIME_API_KEY`) remain the per-run override mechanism — e.g. targeting the local docker instance for e2e tests
 - The key is never accepted as a command-line argument (shell history), never logged, and key commands are CLI-only — they are not exposed as MCP tools
 
 ## Getting your Leantime API key
@@ -241,10 +244,12 @@ leantmcp doctor       # health check: key file, permissions, config, live key
 
 ## Development
 
+No `.env` needed — dev and test flows resolve credentials from the environment first, then from `~/.config/leantime/` (see [Key management](#key-management)):
+
 ```bash
-cp .env.example .env
-# Edit .env with your Leantime URL and API key
 deno task dev
+# Override per run (e.g. against the local docker instance):
+LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY=lt_local... deno task dev
 ```
 
 ### Local Leantime instance

@@ -6,16 +6,21 @@ import { LeantimeClient } from "./leantime-client.ts";
 import { registerAllTools } from "./tools/mod.ts";
 import {
   doctorChecks,
+  instanceUrlPath,
   keyRotateCommand,
   keySetCommand,
   keyShowCommand,
   keyTestCommand,
   readKey,
+  resolveServerEnv,
   secretPath,
+  urlSetCommand,
+  urlShowCommand,
+  writeUrl,
 } from "./keyring.ts";
 import { IS_WINDOWS } from "./keyring.ts";
 
-const VERSION = "1.4.1";
+const VERSION = "1.4.2";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -31,6 +36,8 @@ COMMANDS
   key show           Show the stored key, masked
   key test           Validate the stored key against the instance
   key rotate         Mint a new key (same role), verify it live, replace the stored one
+  url set <url>      Set the Leantime instance URL (configs with pointers follow automatically)
+  url show           Show the resolved instance URL and its source
   doctor             Health check: key file, config, live key validation
   --help, -h         Show this help
   --version, -v      Show version
@@ -148,17 +155,22 @@ export async function setupConfig(
 
   leantimeUrl = leantimeUrl.replace(/\/+$/, "");
 
+  // Persist the URL to the keyring dir — it becomes the single source of
+  // truth; configs only get a {file:...} pointer below.
+  await writeUrl(leantimeUrl);
+
   // When the key already lives in the secret file, store only a {file:...}
   // pointer in the config — opencode substitutes file contents natively.
   const storedKey = await readKey();
   const apiKeyValue = storedKey === apiKey
     ? `{file:${secretPath()}}`
     : apiKey;
+  const urlValue = `{file:${instanceUrlPath()}}`;
 
   const targetPath = getSetupPath(global);
   const existing = await readJsonFile(targetPath);
   const mcpCommand = getMcpCommand();
-  const merged = buildMergedConfig(existing, mcpCommand, leantimeUrl, apiKeyValue);
+  const merged = buildMergedConfig(existing, mcpCommand, urlValue, apiKeyValue);
 
   await writeJsonFile(targetPath, merged);
   if (!IS_WINDOWS) {
@@ -176,20 +188,21 @@ export async function setupConfig(
   }
   return targetPath;
 }
-
 async function serve(): Promise<void> {
-  const leantimeUrl = Deno.env.get("LEANTIME_URL");
-  const leantimeApiKey = Deno.env.get("LEANTIME_API_KEY");
-
-  if (!leantimeUrl || !leantimeApiKey) {
+  // Resolution order: environment (incl. legacy .env via dotenv) > keyring
+  // files (~/.config/leantime/). Env vars are the per-run override mechanism.
+  const env = await resolveServerEnv();
+  if (!env.ok) {
     console.error(
-      "Missing LEANTIME_URL or LEANTIME_API_KEY environment variables.",
+      `Missing ${env.missing.join(" and ")} — no value found in the environment, .env or ${secretDirForHelp()}.`,
     );
-    console.error("Create a .env file based on .env.example or run: leantmcp setup");
+    console.error(
+      "Run: leantmcp key set && leantmcp url set <url>  (or leantmcp setup global)",
+    );
     Deno.exit(1);
   }
 
-  const client = new LeantimeClient(leantimeUrl, leantimeApiKey);
+  const client = new LeantimeClient(env.url, env.apiKey);
 
   const server = new McpServer({
     name: "leantime-mcp",
@@ -200,6 +213,11 @@ async function serve(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+function secretDirForHelp(): string {
+  return Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ??
+    "~/.config/leantime";
 }
 
 // CLI dispatch — only when run as the entrypoint (deno run / compiled binary),
@@ -235,6 +253,20 @@ if (import.meta.main) {
       if (!r.ok) Deno.exit(1);
     } else {
       console.error("Usage: leantmcp key set|show|test|rotate");
+      Deno.exit(1);
+    }
+  } else if (args[0] === "url") {
+    const sub = args[1];
+    if (sub === "set") {
+      const r = await urlSetCommand(args[2]);
+      console.log(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      if (!r.ok) Deno.exit(1);
+    } else if (sub === "show") {
+      const r = await urlShowCommand();
+      console.log(r.message);
+      if (!r.ok) Deno.exit(1);
+    } else {
+      console.error("Usage: leantmcp url set <url>|show");
       Deno.exit(1);
     }
   } else if (args[0] === "doctor") {

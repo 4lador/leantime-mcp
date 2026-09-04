@@ -35,6 +35,11 @@ jobs:
           ./leantmcp.exe key set
           ./leantmcp.exe key show
         shell: pwsh
+      - name: "URL flow — url set + url show"
+        run: |
+          ./leantmcp.exe url set https://ci-instance.leantime.test
+          ./leantmcp.exe url show
+        shell: pwsh
       - name: MCP handshake smoke test
         run: deno run --allow-run --allow-env scripts/smoke.ts
         env:

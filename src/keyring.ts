@@ -24,6 +24,29 @@ export function secretPath(): string {
   return `${secretDir()}/api-key`;
 }
 
+/** The instance URL file — configuration, not a secret (no chmod needed). */
+export function instanceUrlPath(): string {
+  return `${secretDir()}/instance-url`;
+}
+
+export async function writeUrl(url: string): Promise<string> {
+  await Deno.mkdir(secretDir(), { recursive: true });
+  const clean = url.replace(/[\r\n]+$/, "").replace(/\/+$/, "");
+  await Deno.writeTextFile(instanceUrlPath(), clean);
+  return instanceUrlPath();
+}
+
+export async function readUrl(): Promise<string | null> {
+  try {
+    const url = (await Deno.readTextFile(instanceUrlPath()))
+      .replace(/[\r\n]+$/, "")
+      .replace(/\/+$/, "");
+    return url || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Write the key to the secret file. Returns the path written. */
 export async function writeKey(key: string): Promise<string> {
   await Deno.mkdir(secretDir(), { recursive: true });
@@ -101,19 +124,122 @@ export async function testKey(
   }
 }
 
-/** Resolve the instance URL: env first, then the global opencode config. */
-export async function resolveUrl(): Promise<string | null> {
-  const fromEnv = Deno.env.get("LEANTIME_URL");
-  if (fromEnv) return fromEnv.replace(/\/+$/, "");
+/** Resolve the instance URL: env first (override mechanism), then the keyring
+ * file, then legacy configs — ignoring config values that are {file:} pointers
+ * (useless as URLs here). */
+export interface ResolvedUrl {
+  url: string;
+  source: "env" | "keyring" | "config";
+}
+
+export async function resolveUrlDetailed(): Promise<ResolvedUrl | null> {
+  const fromEnv = Deno.env.get("LEANTIME_URL")?.replace(/\/+$/, "");
+  if (fromEnv) return { url: fromEnv, source: "env" };
+
+  const fromFile = await readUrl();
+  if (fromFile) return { url: fromFile, source: "keyring" };
+
   try {
     const cfg = JSON.parse(
       await Deno.readTextFile(`${homeDir()}/.opencode/opencode.json`),
     );
     const url = cfg?.mcp?.leantime?.environment?.LEANTIME_URL;
-    return url ? String(url).replace(/\/+$/, "") : null;
+    if (url && !String(url).startsWith("{file:")) {
+      return { url: String(url).replace(/\/+$/, ""), source: "config" };
+    }
   } catch {
-    return null;
+    // no config
   }
+  return null;
+}
+
+export async function resolveUrl(): Promise<string | null> {
+  return (await resolveUrlDetailed())?.url ?? null;
+}
+
+/** Resolve the server credentials: environment (incl. a legacy .env loaded by
+ * dotenv) first, then the keyring files. Env vars are the per-run override
+ * mechanism — e.g. targeting the local docker instance for e2e tests. */
+export type ServerEnv =
+  | { ok: true; url: string; apiKey: string }
+  | { ok: false; missing: string[] };
+
+export async function resolveServerEnv(): Promise<ServerEnv> {
+  const url = Deno.env.get("LEANTIME_URL")?.replace(/\/+$/, "") ||
+    (await readUrl());
+  const apiKey = Deno.env.get("LEANTIME_API_KEY") || (await readKey());
+
+  const missing: string[] = [];
+  if (!url) missing.push("LEANTIME_URL");
+  if (!apiKey) missing.push("LEANTIME_API_KEY");
+  if (missing.length > 0) return { ok: false, missing };
+
+  return { ok: true, url: url!, apiKey: apiKey! };
+}
+
+/** `leantime url set [URL]` — change the instance. The URL is not a secret, so
+ * a plain argument is fine (unlike the key). Configs holding {file:} pointers
+ * follow automatically. */
+export async function urlSetCommand(
+  urlInput?: string,
+  fetchFn?: FetchFn,
+): Promise<CommandResult> {
+  const url = urlInput?.trim() ||
+    Deno.env.get("LEANTIME_URL")?.trim() ||
+    prompt("Leantime instance URL:")?.trim() ||
+    "";
+  if (!url) {
+    return { ok: false, message: "No URL provided." };
+  }
+  const clean = url.replace(/\/+$/, "");
+  const path = await writeUrl(clean);
+
+  // Live-verify the stored key against the new instance (best effort).
+  const key = await readKey();
+  let verifyNote: string;
+  if (key) {
+    const live = await testKey(clean, key, fetchFn);
+    verifyNote = live.ok
+      ? `Stored key verified against the new instance (${live.message}).`
+      : `WARNING: the stored key failed against the new instance (${live.message}). If you changed instances, run: leantmcp key set`;
+  } else {
+    verifyNote = "No stored key yet — run: leantmcp key set";
+  }
+
+  // Legacy configs holding a plaintext URL won't follow the pointer.
+  let legacyNote = "";
+  try {
+    const cfg = JSON.parse(
+      await Deno.readTextFile(`${homeDir()}/.opencode/opencode.json`),
+    );
+    const cfgUrl = String(cfg?.mcp?.leantime?.environment?.LEANTIME_URL ?? "");
+    if (cfgUrl && !cfgUrl.startsWith("{file:") && cfgUrl.replace(/\/+$/, "") !== clean) {
+      legacyNote =
+        `\nNOTE: the global opencode config still holds a plaintext URL (${cfgUrl}) — run: leantmcp setup global to switch it to a pointer.`;
+    }
+  } catch {
+    // no config
+  }
+
+  return {
+    ok: true,
+    message:
+      `Instance URL stored (${clean}) at ${path}.\n` +
+      `${verifyNote}\n` +
+      `Configs using {file:} pointers follow automatically.${legacyNote}`,
+  };
+}
+
+/** `leantime url show` — resolved URL and where it comes from. */
+export async function urlShowCommand(): Promise<CommandResult> {
+  const r = await resolveUrlDetailed();
+  if (!r) {
+    return {
+      ok: false,
+      message: "No instance URL configured (env, keyring or config). Run: leantmcp url set <url>",
+    };
+  }
+  return { ok: true, message: `${r.url}  (source: ${r.source})` };
 }
 
 /** Hidden (no-echo) terminal prompt. Falls back to a plain prompt when stdin
@@ -211,7 +337,7 @@ export async function keyTestCommand(fetchFn?: FetchFn): Promise<CommandResult> 
   if (!url) {
     return {
       ok: false,
-      message: "No LEANTIME_URL (env or global opencode config) to test against.",
+      message: "No instance URL configured — run: leantmcp url set <url>",
     };
   }
   const result = await testKey(url, key, fetchFn);
@@ -244,7 +370,7 @@ export async function keyRotateCommand(
   if (!url) {
     return {
       ok: false,
-      message: "No LEANTIME_URL (env or global opencode config) to rotate against.",
+      message: "No instance URL configured — run: leantmcp url set <url>",
     };
   }
 
@@ -271,8 +397,10 @@ export async function keyRotateCommand(
   // source: "api" is REQUIRED — the service alone does not set it, and without
   // it the created key is rejected at authentication (401). Only the web UI
   // controller sets it; we must pass it explicitly.
+  // Project relations must be preserved too — a fresh key is assigned to NO
+  // project and would see nothing.
   const created = await client.call<
-    { user?: string; passwordClean?: string; password?: string } | false
+    { id?: unknown; user?: string; passwordClean?: string; password?: string } | false
   >(
     "Api.createAPIKey",
     { values: { firstname: name, role: entry.role, source: "api" } },
@@ -283,6 +411,30 @@ export async function keyRotateCommand(
       message: "Key creation failed on the instance — rotation aborted.",
     };
   }
+
+  // Copy the old key's project assignments onto the new one (best effort).
+  let relationsNote = "";
+  try {
+    const assigned = await client.call<{ id: unknown }[]>(
+      "Projects.getProjectsAssignedToUser",
+      { userId: String(entry.id) },
+    );
+    const projectIds = (assigned ?? []).map((p) => String(p.id));
+    if (projectIds.length > 0 && created.id !== undefined) {
+      const rel = await client.call<boolean>(
+        "Projects.editUserProjectRelations",
+        { id: String(created.id), projects: projectIds },
+      );
+      if (rel !== true) {
+        relationsNote =
+          "\nWARNING: could not copy project assignments to the new key — assign them in the Leantime UI.";
+      }
+    }
+  } catch {
+    relationsNote =
+      "\nWARNING: could not copy project assignments to the new key — assign them in the Leantime UI.";
+  }
+
   // The secret only ever exists in this process's memory.
   const newKey = `lt_${created.user}_${created.passwordClean ?? created.password}`;
 
@@ -302,8 +454,9 @@ export async function keyRotateCommand(
   return {
     ok: true,
     message:
-      `Key rotated: ${maskKey(newKey)} (role ${entry.role}, name "${name}") stored at ${secretPath()}.\n` +
-      `Update any other consumers that embed the old key (e.g. .env, CI secrets).\n` +
+      `Key rotated: ${maskKey(newKey)} (role ${entry.role}, name "${name}") stored at ${secretPath()}.` +
+      relationsNote +
+      `\nUpdate any other consumers that embed the old key (e.g. CI secrets).\n` +
       `Now delete the old key ${oldMasked} in the Leantime UI (Company Settings → API Keys).`,
   };
 }
@@ -333,18 +486,20 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
     });
   }
 
-  // Instance URL
-  const url = await resolveUrl();
+  // Instance URL (with source)
+  const resolved = await resolveUrlDetailed();
   results.push({
     label: "instance URL",
-    status: url ? "ok" : "warn",
-    detail: url ?? "not found (set LEANTIME_URL or run setup global)",
+    status: resolved ? "ok" : "warn",
+    detail: resolved
+      ? `${resolved.url} (source: ${resolved.source})`
+      : "not found — run: leantmcp url set <url>",
   });
 
   // Live key validation
   const key = await readKey();
-  if (key && url) {
-    const live = await testKey(url, key, fetchFn);
+  if (key && resolved) {
+    const live = await testKey(resolved.url, key, fetchFn);
     results.push({
       label: "key validation",
       status: live.ok ? "ok" : "fail",
@@ -352,21 +507,26 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
     });
   }
 
-  // Global opencode config
+  // Global opencode config — expect BOTH the key and URL to be pointers
   const globalConfig = `${homeDir()}/.opencode/opencode.json`;
   try {
     const cfg = JSON.parse(await Deno.readTextFile(globalConfig));
     const env = cfg?.mcp?.leantime?.environment ?? {};
-    const stored = String(env.LEANTIME_API_KEY ?? "");
-    const usesPointer = stored.startsWith("{file:");
+    const storedKey = String(env.LEANTIME_API_KEY ?? "");
+    const storedUrl = String(env.LEANTIME_URL ?? "");
+    const keyPointer = storedKey.startsWith("{file:");
+    const urlPointer = storedUrl.startsWith("{file:");
     const cfgMode = await fileMode(globalConfig);
     const permOk = IS_WINDOWS || cfgMode === "600";
+    const allPointers = keyPointer && urlPointer;
     results.push({
       label: "global opencode config",
-      status: usesPointer && permOk ? "ok" : "warn",
+      status: allPointers && permOk ? "ok" : "warn",
       detail:
-        `${globalConfig} (mode ${cfgMode ?? "acl"}) — LEANTIME_API_KEY is ` +
-        `${usesPointer ? "a {file:} pointer" : "plaintext"}${stored ? "" : " (missing)"}`,
+        `${globalConfig} (mode ${cfgMode ?? "acl"}) — ` +
+        `LEANTIME_API_KEY is ${keyPointer ? "a pointer" : storedKey ? "plaintext" : "missing"}, ` +
+        `LEANTIME_URL is ${urlPointer ? "a pointer" : storedUrl ? "plaintext" : "missing"}` +
+        `${allPointers ? "" : " — run: leantmcp setup global"}`,
     });
   } catch {
     results.push({
@@ -374,6 +534,25 @@ export async function doctorChecks(fetchFn?: FetchFn): Promise<CheckResult[]> {
       status: "warn",
       detail: `${globalConfig} not found — run: leantmcp setup global`,
     });
+  }
+
+  // .env in the current directory holding a key copy (stale or duplicate)
+  try {
+    const envContent = await Deno.readTextFile("./.env");
+    const match = envContent.match(/^LEANTIME_API_KEY=(.+)$/m);
+    if (match) {
+      const envKey = match[1].trim();
+      const stored = await readKey();
+      results.push({
+        label: ".env key copy",
+        status: "warn",
+        detail: stored && envKey === stored
+          ? "./.env embeds a duplicate of the stored key — remove the line, the keyring is authoritative"
+          : "./.env embeds a DIFFERENT key than the keyring — likely stale (401s ahead), remove the line",
+      });
+    }
+  } catch {
+    // no .env — the normal state
   }
 
   return results;

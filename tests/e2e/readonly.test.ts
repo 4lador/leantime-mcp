@@ -1,9 +1,12 @@
 import { assertEquals } from "@std/assert";
 import { LeantimeClient } from "../../src/leantime-client.ts";
 import type { LeantimeStatusMap } from "../../src/types.ts";
+import { readKey, readUrl } from "../../src/keyring.ts";
 
-const LEANTIME_URL = Deno.env.get("LEANTIME_URL");
-const LEANTIME_API_KEY = Deno.env.get("LEANTIME_API_KEY");
+// Environment first (per-run override, e.g. the local docker instance),
+// then the keyring files (~/.config/leantime/).
+const LEANTIME_URL = Deno.env.get("LEANTIME_URL") ?? await readUrl();
+const LEANTIME_API_KEY = Deno.env.get("LEANTIME_API_KEY") ?? await readKey();
 const hasCredentials = !!(LEANTIME_URL && LEANTIME_API_KEY);
 
 Deno.test({
