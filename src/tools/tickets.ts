@@ -2,6 +2,11 @@ import { McpServer } from "@mcp/server";
 import { z } from "zod";
 import type { LeantimeClient } from "../leantime-client.ts";
 import { markdownToHtml } from "../markdown.ts";
+import {
+  CONFIRM_PARAM_DOC,
+  checkDestructiveConfirmation,
+  isLeantimeError,
+} from "./shared.ts";
 
 function errorResult(message: string) {
   return {
@@ -273,6 +278,107 @@ export function registerTicketTools(server: McpServer, client: LeantimeClient) {
         );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (e) {
+        return errorResult(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.tool(
+    "leantime_list_subtasks",
+    "List the subtasks of a ticket (create subtasks with leantime_create_ticket " +
+      "and dependingTicketId)",
+    {
+      ticketId: z.string().describe("The parent ticket ID"),
+    },
+    async ({ ticketId }) => {
+      try {
+        const result = await client.call<unknown[]>("tickets.getAllSubtasks", {
+          ticketId,
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result ?? [], null, 2) }],
+        };
+      } catch (e) {
+        return errorResult(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.tool(
+    "leantime_my_tasks",
+    "List the open tickets assigned to a user (defaults to the API key owner) — " +
+      "the 'what's on my plate' view",
+    {
+      userId: z.string().optional().describe(
+        "User ID (defaults to the API key owner)",
+      ),
+      projectId: z.string().optional().describe("Restrict to one project"),
+    },
+    async ({ userId, projectId }) => {
+      try {
+        // Param is `project` (not projectId) — must match the service signature.
+        const result = await client.call<unknown[]>("tickets.getAllOpenUserTickets", {
+          ...(userId ? { userId } : {}),
+          ...(projectId ? { project: projectId } : {}),
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(result ?? [], null, 2) }],
+        };
+      } catch (e) {
+        return errorResult(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.tool(
+    "leantime_get_ticket_options",
+    "Get the pick-list options for tickets of a project: priorities, efforts " +
+      "(story points), kanban columns and ticket types",
+    {
+      projectId: z.string().describe("The project ID"),
+    },
+    async ({ projectId }) => {
+      try {
+        const [priorities, efforts, kanban, types] = await Promise.all([
+          client.call<Record<string, unknown>>("tickets.getPriorityLabels", {}),
+          client.call<Record<string, unknown>>("tickets.getEffortLabels", {}),
+          client.call<Record<string, unknown>>("tickets.getKanbanColumns", {}),
+          client.call<Record<string, unknown>>("tickets.getTicketTypes", {}),
+        ]);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ priorities, efforts, kanban, types }, null, 2),
+          }],
+        };
+      } catch (e) {
+        return errorResult(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.tool(
+    "leantime_delete_ticket",
+    "Delete a ticket. Destructive: requires explicit user approval (confirm: true) " +
+      "unless LEANTIME_MCP_DESTRUCTIVE_POLICY is set otherwise. Prefer updating the " +
+      "status to a 'done/cancelled' state when possible.",
+    {
+      ticketId: z.string().describe("The ticket ID"),
+      confirm: z.boolean().optional().describe(CONFIRM_PARAM_DOC),
+    },
+    async ({ ticketId, confirm }) => {
+      const check = checkDestructiveConfirmation(confirm, "ticket");
+      if (!check.allowed) return errorResult(check.message);
+      try {
+        const result = await client.call<unknown>("tickets.delete", { id: ticketId });
+        if (isLeantimeError(result)) return errorResult(result.msg);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ deleted: true, ticketId }, null, 2),
+          }],
         };
       } catch (e) {
         return errorResult(e instanceof Error ? e.message : String(e));

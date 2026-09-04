@@ -39,8 +39,8 @@ Deno.test("tool handler — leantime_list_tickets enriches with statuses", async
 
   const result = await tools.get("leantime_list_tickets")!({ projectId: "3" }) as Record<string, unknown>;
   const parsed = JSON.parse((result.content as Array<Record<string, unknown>>)[0].text as string);
-  // Leantime returns milestones too unless filtered by type: 5 tasks + 2 milestones
-  assertEquals(parsed.length, 7);
+  // Leantime returns milestones too unless filtered by type: 6 tasks + 2 milestones
+  assertEquals(parsed.length, 8);
   assertEquals(parsed[0].statusLabel, "Terminé");
   assertEquals(parsed[0].statusType, "DONE");
 });
@@ -53,7 +53,7 @@ Deno.test("tool handler — list_tickets with type filter excludes milestones", 
 
   const result = await tools.get("leantime_list_tickets")!({ projectId: "3", type: "task" }) as Record<string, unknown>;
   const parsed = JSON.parse((result.content as Array<Record<string, unknown>>)[0].text as string);
-  assertEquals(parsed.length, 5);
+  assertEquals(parsed.length, 6);
 });
 
 Deno.test("tool handler — list_tickets is scoped to the requested project (regression)", async () => {
@@ -315,7 +315,7 @@ Deno.test("tool handler — leantime_list_sprints returns array", async () => {
   const result = await tools.get("leantime_list_sprints")!({ projectId: "3" }) as Record<string, unknown>;
   const parsed = JSON.parse((result.content as Array<Record<string, unknown>>)[0].text as string);
   assertEquals(Array.isArray(parsed), true);
-  assertEquals(parsed.length, 1);
+  assertEquals(parsed.length, 3);
 });
 
 Deno.test("tool handler — error wrapping on API failure", async () => {
@@ -347,7 +347,7 @@ Deno.test("tool handler — error wrapping on RPC error", async () => {
   assertEquals((content.text as string).includes("Access denied"), true);
 });
 
-Deno.test("tool handler — all 13 tools are registered", () => {
+Deno.test("tool handler — all 37 tools are registered", () => {
   const { mockServer, tools } = createToolRegistry();
   const { fetch: mockFetch } = createMockFetch();
   const client = new LeantimeClient("https://leantime.test", "key", mockFetch);
@@ -357,17 +357,41 @@ Deno.test("tool handler — all 13 tools are registered", () => {
     "leantime_list_projects",
     "leantime_get_project",
     "leantime_get_project_progress",
+    "leantime_create_project",
+    "leantime_update_project",
+    "leantime_find_projects",
+    "leantime_list_project_users",
+    "leantime_list_clients",
     "leantime_list_tickets",
     "leantime_get_ticket",
     "leantime_create_ticket",
     "leantime_update_ticket",
+    "leantime_delete_ticket",
+    "leantime_list_subtasks",
+    "leantime_my_tasks",
+    "leantime_get_ticket_options",
     "leantime_get_statuses",
     "leantime_get_ticket_types",
     "leantime_list_milestones",
     "leantime_get_milestone",
+    "leantime_create_milestone",
+    "leantime_update_milestone",
+    "leantime_get_milestone_progress",
+    "leantime_delete_milestone",
     "leantime_list_sprints",
+    "leantime_create_sprint",
+    "leantime_update_sprint",
+    "leantime_get_current_sprint",
     "leantime_list_users",
+    "leantime_list_comments",
+    "leantime_add_comment",
+    "leantime_update_comment",
+    "leantime_delete_comment",
+    "leantime_log_time",
+    "leantime_get_ticket_time",
+    "leantime_list_timesheets",
+    "leantime_delete_timesheet_entry",
   ];
   assertEquals([...tools.keys()].sort(), expected.sort());
-  assertEquals(tools.size, 13);
+  assertEquals(tools.size, 37);
 });

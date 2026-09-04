@@ -8,12 +8,13 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 ## Features
 
-- List, get, create, and update tickets/tasks
-- Deterministic Markdown → rich HTML descriptions: ticket formatting is applied server-side, so descriptions are always properly rendered in Leantime's editor (no more wall-of-text tickets)
-- Mandatory assignment on ticket creation: the server rejects calls that don't assign a user (or explicitly opt out), so agents always ask who should own the task
-- List projects, milestones, sprints, and users
+- Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments and time tracking (37 tools)
+- Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor (no more wall-of-text tickets)
+- Mandatory assignment on ticket/milestone creation: the server rejects calls that don't assign a user (or explicitly opt out), so agents always ask who should own the task
+- Destructive operations gated behind explicit confirmation (`LEANTIME_MCP_DESTRUCTIVE_POLICY`)
 - Automatic status enrichment — every ticket includes `statusLabel`, `statusType`, and `statusColor` so the LLM never misinterprets status values
-- Project progress metrics
+- Project progress metrics and milestone progress (effort × priority weighted)
+- v3.7.x API quirks handled server-side: scoping filters, session-less API keys, id mangling, array-wrapped ids
 
 ## Install
 
@@ -121,30 +122,96 @@ Raw HTML in descriptions is always escaped — it renders as literal text, never
 
 ## Assignment policy
 
-Creating a ticket requires an explicit assignment decision:
+Creating a ticket or milestone requires an explicit assignment decision:
 
-- either `editorId` — the user the ticket is assigned to (validated against the real user list; call `leantime_list_users` to get candidates),
-- or `unassigned: true` — only when the user explicitly asked to leave the ticket unassigned.
+- either `editorId` — the user the ticket is assigned to (validated against the real user list; call `leantime_list_users` or `leantime_list_project_users` to get candidates),
+- or `unassigned: true` — only when the user explicitly asked to leave it unassigned.
 
 If neither is provided, the server rejects the call with an error instructing the agent to ask the user first. Updates only validate `editorId` when you actually change the assignment.
 
+## Safety: destructive operations
+
+The delete tools (`leantime_delete_ticket`, `leantime_delete_milestone`, `leantime_delete_comment`, `leantime_delete_timesheet_entry`) are gated behind an explicit confirmation:
+
+- by default (`ask`), they refuse to run unless called with `confirm: true` — the tool error instructs the agent to obtain the user's explicit approval first and to retry;
+- `LEANTIME_MCP_DESTRUCTIVE_POLICY=deny` refuses deletions outright, even with `confirm: true` (emergency stop);
+- `LEANTIME_MCP_DESTRUCTIVE_POLICY=allow` skips the confirmation (CI/scripting).
+
+Project hiding/deletion is intentionally not exposed: Leantime's API has no project-delete method that this MCP is willing to drive.
+
 ## Available MCP Tools
+
+**Projects & clients**
 
 | Tool | Description |
 |------|-------------|
 | `leantime_list_projects` | List all projects |
 | `leantime_get_project` | Get project details |
 | `leantime_get_project_progress` | Get project progress metrics |
+| `leantime_create_project` | Create a project (Markdown details, clientId required) |
+| `leantime_update_project` | Update a project (patch — only provided fields change) |
+| `leantime_find_projects` | Search projects by name |
+| `leantime_list_project_users` | List users assigned to a project (valid editorId candidates) |
+| `leantime_list_clients` | List clients (clientId needed to create projects) |
+
+**Tickets**
+
+| Tool | Description |
+|------|-------------|
 | `leantime_list_tickets` | List tickets with filters (status, milestone, sprint, user, type, search) |
 | `leantime_get_ticket` | Get ticket details |
-| `leantime_create_ticket` | Create a new ticket (Markdown description, mandatory assignment) |
-| `leantime_update_ticket` | Update an existing ticket (Markdown description) |
+| `leantime_create_ticket` | Create a ticket (Markdown description, mandatory assignment, subtasks via dependingTicketId) |
+| `leantime_update_ticket` | Update a ticket (patch — other fields are never wiped) |
+| `leantime_delete_ticket` | Delete a ticket (confirm-gated) |
+| `leantime_list_subtasks` | List a ticket's subtasks |
+| `leantime_my_tasks` | Open tickets assigned to a user (default: the API key owner) |
+| `leantime_get_ticket_options` | Priorities, efforts, kanban columns and ticket types |
 | `leantime_get_statuses` | Get status labels for a project |
 | `leantime_get_ticket_types` | Get ticket types for a project |
-| `leantime_list_milestones` | List milestones |
+
+**Comments**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_list_comments` | List a ticket's discussion |
+| `leantime_add_comment` | Comment on a ticket (Markdown converted to rich HTML) |
+| `leantime_update_comment` | Edit a comment (Markdown) |
+| `leantime_delete_comment` | Delete a comment (confirm-gated) |
+
+**Time tracking**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_log_time` | Log hours on a ticket (`add` accumulates, `set` is idempotent) |
+| `leantime_get_ticket_time` | Total and per-day booked time for a ticket |
+| `leantime_list_timesheets` | List time entries between two dates |
+| `leantime_delete_timesheet_entry` | Delete a time entry (confirm-gated) |
+
+**Milestones**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_list_milestones` | List milestones of a project |
 | `leantime_get_milestone` | Get milestone details |
-| `leantime_list_sprints` | List sprints |
-| `leantime_list_users` | List users (id, name) — for ticket assignment |
+| `leantime_create_milestone` | Create a milestone (Markdown description, mandatory assignment) |
+| `leantime_update_milestone` | Update a milestone (patch) |
+| `leantime_get_milestone_progress` | Completion % (effort × priority weighted, Leantime's formula) |
+| `leantime_delete_milestone` | Delete a milestone (confirm-gated; its tickets are kept) |
+
+**Sprints**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_list_sprints` | List sprints of a project |
+| `leantime_create_sprint` | Create a sprint |
+| `leantime_update_sprint` | Update a sprint (name/dates) |
+| `leantime_get_current_sprint` | Sprint in progress (or next upcoming), computed from dates |
+
+**Users**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_list_users` | List all users (id, name) — for assignment |
 
 ## Getting your Leantime API key
 

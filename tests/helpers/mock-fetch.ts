@@ -1,5 +1,5 @@
 import type { LeantimeStatusMap } from "../../src/types.ts";
-import { STATUS_MAP, TICKETS, PROJECTS, MILESTONES, SPRINTS, USERS, RPC_OK, RPC_ERROR } from "./fixtures.ts";
+import { STATUS_MAP, TICKETS, PROJECTS, MILESTONES, SPRINTS, USERS, CLIENTS, COMMENTS, TIMESHEETS, RPC_OK, RPC_ERROR } from "./fixtures.ts";
 
 type RpcHandler = (method: string, params: Record<string, unknown>) => unknown;
 
@@ -51,6 +51,57 @@ export function createMockFetch(handler?: Partial<Record<string, RpcHandler>>) {
     "leantime.rpc.tickets.getTicketTypes": () => RPC_OK({ task: "Task", story: "Story", bug: "Bug" }),
     "leantime.rpc.sprints.getAllSprints": () => RPC_OK(SPRINTS),
     "leantime.rpc.users.getAll": () => RPC_OK(USERS),
+    "leantime.rpc.Clients.getAll": () => RPC_OK(CLIENTS),
+    "leantime.rpc.comments.getComments": (_m, params) =>
+      RPC_OK(COMMENTS.filter((c) => String(c.moduleId) === String(params.entityId))),
+    "leantime.rpc.comments.addComment": () => RPC_OK(true),
+    "leantime.rpc.comments.editComment": () => RPC_OK(true),
+    "leantime.rpc.comments.deleteComment": () => RPC_OK(true),
+    "leantime.rpc.timesheets.logTime": () => RPC_OK(true),
+    "leantime.rpc.timesheets.upsertTime": () => RPC_OK(true),
+    "leantime.rpc.timesheets.getSumLoggedHoursForTicket": () => RPC_OK(2.5),
+    "leantime.rpc.timesheets.getLoggedHoursForTicketByDate": () =>
+      RPC_OK([{ workDate: "2026-09-04", hours: 2.5 }]),
+    "leantime.rpc.timesheets.getAll": (_m, params) =>
+      RPC_OK(
+        TIMESHEETS.filter(
+          (t) => params.projectId === undefined || String(t.ticketId) !== "999",
+        ),
+      ),
+    "leantime.rpc.timesheets.deleteTime": () => RPC_OK(true),
+    "leantime.rpc.sprints.getSprint": () => RPC_OK(SPRINTS[0]),
+    "leantime.rpc.sprints.addSprint": () => RPC_OK(2),
+    "leantime.rpc.sprints.editSprint": (_m, params) =>
+      RPC_OK({ ...(params.params as Record<string, unknown>) }),
+    "leantime.rpc.projects.addProject": () => RPC_OK(5),
+    "leantime.rpc.projects.patch": () => RPC_OK(true),
+    "leantime.rpc.projects.findProject": (_m, params) =>
+      RPC_OK(
+        PROJECTS
+          .filter((p) => p.name.toLowerCase().includes(String(params.term ?? "").toLowerCase()))
+          // Real API mangles ids into "id-modified"
+          .map((p) => ({ ...p, id: `${p.id}-2026-09-04 00:00:00` })),
+      ),
+    "leantime.rpc.projects.getUsersAssignedToProject": () => RPC_OK(USERS),
+    "leantime.rpc.tickets.getMilestoneProgress": () => RPC_OK(50.0),
+    "leantime.rpc.tickets.delete": () => RPC_OK(true),
+    "leantime.rpc.tickets.deleteMilestone": () => RPC_OK(true),
+    "leantime.rpc.tickets.getAllSubtasks": (_m, params) =>
+      RPC_OK(TICKETS.filter((t) => String(t.dependingTicketId ?? "") === String(params.ticketId))),
+    "leantime.rpc.tickets.getAllOpenUserTickets": (_m, params) =>
+      RPC_OK(
+        TICKETS.filter(
+          (t) =>
+            Number(t.status) !== 0 &&
+            (params.project === undefined || String(t.projectId) === String(params.project)),
+        ),
+      ),
+    "leantime.rpc.tickets.getPriorityLabels": () =>
+      RPC_OK({ "1": "Low", "3": "Medium", "5": "High" }),
+    "leantime.rpc.tickets.getEffortLabels": () =>
+      RPC_OK({ "0": "?", "1": "S", "2": "M" }),
+    "leantime.rpc.tickets.getKanbanColumns": () =>
+      RPC_OK({ "3": "New", "4": "In Progress", "0": "Done" }),
   };
 
   const allHandlers = { ...defaultHandlers, ...handler };
