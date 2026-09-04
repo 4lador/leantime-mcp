@@ -8,6 +8,11 @@ export class LeantimeClient {
   private fetchFn: FetchFn;
   private rpcId = 0;
   private statusCache = new Map<string, LeantimeStatusMap>();
+  private userCache: { value: Record<string, unknown>[]; expires: number } | null = null;
+
+  /** Cache TTL for the user list (users rarely change; Leantime's default API
+   * rate limit is 10 req/min, so avoid refetching on every ticket creation). */
+  private static USER_CACHE_TTL_MS = 5 * 60 * 1000;
 
   constructor(baseUrl: string, apiKey: string, fetchFn?: FetchFn) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -62,6 +67,15 @@ export class LeantimeClient {
     );
     this.statusCache.set(projectId, result);
     return result;
+  }
+
+  async getUsers(): Promise<Record<string, unknown>[]> {
+    if (this.userCache && this.userCache.expires > Date.now()) {
+      return this.userCache.value;
+    }
+    const value = await this.call<Record<string, unknown>[]>("users.getAll");
+    this.userCache = { value, expires: Date.now() + LeantimeClient.USER_CACHE_TTL_MS };
+    return value;
   }
 
   async enrichWithStatuses<T extends Record<string, unknown>>(

@@ -24,8 +24,8 @@ export function registerMilestoneTools(
         const result = await client.call<Record<string, unknown>[]>(
           "tickets.getAll",
           {
-            currentProject: projectId,
-            type: "milestone",
+            searchCriteria: { currentProject: projectId, type: "milestone" },
+            limit: 200,
           },
         );
         const enriched = await client.enrichWithStatuses(result, projectId);
@@ -49,7 +49,7 @@ export function registerMilestoneTools(
       try {
         const result = await client.call<Record<string, unknown>>(
           "tickets.getTicket",
-          { id: milestoneId, projectId },
+          { id: milestoneId },
         );
         const enriched = await client.enrichSingleWithStatuses(result, projectId);
         return {

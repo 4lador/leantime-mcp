@@ -147,3 +147,15 @@ Deno.test("LeantimeClient — different projects have separate caches", async ()
   const statusCalls = calls.filter((c) => c.method === "leantime.rpc.tickets.getStatusLabels");
   assertEquals(statusCalls.length, 2);
 });
+
+Deno.test("getUsers — caches users.getAll within TTL", async () => {
+  const { fetch: mockFetch, calls } = createMockFetch();
+  const client = new LeantimeClient("https://leantime.test", "key", mockFetch);
+
+  const first = await client.getUsers();
+  const second = await client.getUsers();
+
+  assertEquals(first.length, 2);
+  assertEquals(second.length, 2);
+  assertEquals(calls.filter((c) => c.method === "leantime.rpc.users.getAll").length, 1);
+});

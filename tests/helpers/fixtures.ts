@@ -14,6 +14,7 @@ export const TICKETS = [
   { id: "3", headline: "Task todo", status: 3, projectId: "3", type: "task" },
   { id: "4", headline: "Task blocked", status: 1, projectId: "3", type: "task" },
   { id: "5", headline: "Task unknown status", status: 99, projectId: "3", type: "task" },
+  { id: "6", headline: "Other project task", status: 3, projectId: "4", type: "task" },
 ];
 
 export const PROJECTS = [
@@ -28,6 +29,11 @@ export const MILESTONES = [
 
 export const SPRINTS = [
   { id: "1", name: "Sprint 1", projectId: "3", startDate: "2026-01-01", endDate: "2026-01-14" },
+];
+
+export const USERS = [
+  { id: 1, firstname: "Alador", lastname: "" },
+  { id: 2, firstname: "LM", lastname: "" },
 ];
 
 export const RPC_OK = <T>(result: T) => ({

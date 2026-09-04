@@ -1,0 +1,53 @@
+# Local Leantime instance for developing and testing leantime-mcp.
+# Pinned to the version the MCP is validated against.
+#
+#   docker compose up -d
+#   open http://localhost:8090  → first-run setup wizard (~2 min)
+#   create an API key (Company Settings → API Keys) and use it in .env
+#
+# Then point the MCP at it:
+#   LEANTIME_URL=http://localhost:8090 LEANTIME_API_KEY=lt_... deno task dev
+
+services:
+  leantime-db:
+    image: mysql:8.4
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: leantime
+      MYSQL_USER: leantime
+      MYSQL_PASSWORD: leantime-dev
+      MYSQL_ROOT_PASSWORD: root-dev
+    volumes:
+      - leantime-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  leantime:
+    image: leantime/leantime:3.7.3
+    depends_on:
+      leantime-db:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      LEAN_DB_HOST: leantime-db
+      LEAN_DB_USER: leantime
+      LEAN_DB_PASSWORD: leantime-dev
+      LEAN_DB_DATABASE: leantime
+      LEAN_DB_PORT: "3306"
+      LEAN_SESSION_PASSWORD: "dev-only-session-password-change-me"
+      LEAN_SESSION_SECURE: "false"
+      # Default is 10 req/min — far too low for automated tests
+      LEAN_RATELIMIT_API: "120"
+      LEAN_SITENAME: "leantime-mcp dev"
+    volumes:
+      - leantime-userfiles:/var/www/html/userfiles
+      - leantime-backups:/var/www/html/backupdb
+
+volumes:
+  leantime-db:
+  leantime-userfiles:
+  leantime-backups:
