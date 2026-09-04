@@ -74,10 +74,17 @@ Deno.test("keyring — maskKey shows 6 first / 4 last", () => {
 });
 
 Deno.test("keyring — secretPath prefers HOME and falls back to USERPROFILE", async () => {
-  await withTempHome(async () => {
-    assertEquals(secretPath().startsWith("/tmp/"), true);
+  const original = Deno.env.get("HOME");
+  const tmp = await Deno.makeTempDir();
+  Deno.env.set("HOME", tmp);
+  try {
+    assertEquals(secretPath().startsWith(tmp), true);
     assertEquals(secretPath().endsWith("/.config/leantime/api-key"), true);
-  });
+  } finally {
+    if (original !== undefined) Deno.env.set("HOME", original);
+    else Deno.env.delete("HOME");
+    await Deno.remove(tmp, { recursive: true });
+  }
   const hadHome = Deno.env.get("HOME");
   const hadProfile = Deno.env.get("USERPROFILE");
   try {
