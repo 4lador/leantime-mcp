@@ -255,7 +255,7 @@ leantmcp doctor       # health check: key file, permissions, config, live key
 
 ## Rate limit handling
 
-The MCP server automatically retries on `429 Too Many Requests` responses from the Leantime API — up to 3 retries with intelligent backoff (reads the `Retry-After` / `X-RateLimit-Retry-After` headers when present, falls back to exponential backoff). Agents never need to handle rate limiting themselves. If a rate limit error still surfaces after all retries, the error message instructs waiting ~60 seconds.
+The MCP server transparently retries on `429 Too Many Requests` with **adaptive delays**: it discovers the instance's rate limit from the `X-RateLimit-Limit` header on the first 429, then paces requests accordingly (60s ÷ limit). When headers aren't available, it falls back to a conservative 6-second delay (Leantime's default 10 req/min). Up to 5 retries for rate limits, 2 for transient network errors (502/503/504). On instances with low rate limits, large bulk batches may take several minutes — the tool descriptions inform agents of this.
 
 ## Getting your Leantime API key
 

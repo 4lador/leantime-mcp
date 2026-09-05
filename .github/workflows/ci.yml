@@ -54,9 +54,30 @@ jobs:
           deno-version: v2.x
       - name: Unit & integration tests
         run: deno task test:unit
+      - name: Start local Leantime (docker compose, 10 req/min — real default)
+        run: docker compose up -d
+      - name: Bootstrap instance + exhaustive e2e
+        run: |
+          export LEANTIME_E2E=local LEANTIME_URL=http://localhost:8090
+          export LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)"
+          deno task test:e2e:local
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  local-e2e-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit & integration tests (Windows runtime)
+        run: deno task test:unit
       - name: Start local Leantime (docker compose)
         run: docker compose up -d
       - name: Bootstrap instance + exhaustive e2e
+        shell: bash
         run: |
           export LEANTIME_E2E=local LEANTIME_URL=http://localhost:8090
           export LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)"

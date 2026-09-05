@@ -7,9 +7,9 @@ import { errorResult, fetchUsers, usersList } from "./shared.ts";
 const MAX_BATCH = 50;
 
 const RATE_LIMIT_NOTE =
-  "The server automatically retries on 429 rate limits (3 retries with " +
-  "backoff) — you never need to handle rate limiting yourself. If a rate " +
-  "limit error still surfaces, wait ~60 seconds before the next batch.";
+  "The server transparently retries on 429 rate limits with adaptive delays. " +
+  "On instances with low rate limits (10 req/min default), large batches may " +
+  "take several minutes — consider smaller batches if timeout is a concern.";
 
 interface BulkResult {
   index: number;

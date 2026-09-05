@@ -3,7 +3,14 @@ import type { JsonRpcRequest, JsonRpcResponse, LeantimeStatusMap } from "./types
 export type FetchFn = typeof globalThis.fetch;
 
 /** Maximum retries on 429 rate limit before giving up with a clear error. */
-const MAX_429_RETRIES = 3;
+const MAX_429_RETRIES = 5;
+
+/** Maximum retries on transient network errors (502/503/504). */
+const MAX_NETWORK_RETRIES = 2;
+
+/** Leantime's default API rate limit (req/min) — used as a conservative
+ * fallback when the server doesn't provide headers. */
+const DEFAULT_RATE_LIMIT_PER_MIN = 10;
 
 export class LeantimeClient {
   private baseUrl: string;
@@ -12,6 +19,10 @@ export class LeantimeClient {
   private rpcId = 0;
   private statusCache = new Map<string, LeantimeStatusMap>();
   private userCache: { value: Record<string, unknown>[]; expires: number } | null = null;
+
+  /** Rate limit discovered from a 429 response's X-RateLimit-Limit header.
+   * Cached for the client's lifetime — used to calculate inter-request delays. */
+  private discoveredRateLimit: number | null = null;
 
   /** Cache TTL for the user list (users rarely change; Leantime's default API
    * rate limit is 10 req/min, so avoid refetching on every ticket creation). */
@@ -26,8 +37,7 @@ export class LeantimeClient {
   /**
    * Parse Retry-After / X-RateLimit-Retry-After headers into milliseconds.
    * Handles both "seconds" format and HTTP-date format.
-   * Returns null when no usable header is present (caller falls back to
-   * exponential backoff).
+   * Returns null when no usable header is present.
    */
   private parseRetryAfter(response: Response): number | null {
     const ra = response.headers.get("Retry-After");
@@ -47,6 +57,31 @@ export class LeantimeClient {
     return null;
   }
 
+  /**
+   * Discover and cache the rate limit from a 429 response.
+   * Leantime always sends X-RateLimit-Limit on 429 responses.
+   */
+  private discoverRateLimit(response: Response): void {
+    if (this.discoveredRateLimit !== null) return;
+    const limit = response.headers.get("X-RateLimit-Limit");
+    if (limit) {
+      const parsed = parseInt(limit, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        this.discoveredRateLimit = parsed;
+      }
+    }
+  }
+
+  /**
+   * Calculate the inter-request delay for the current rate limit.
+   * Uses the discovered limit if available, otherwise a conservative default
+   * (10 req/min = 6s between requests).
+   */
+  private get interRequestDelay(): number {
+    const limit = this.discoveredRateLimit ?? DEFAULT_RATE_LIMIT_PER_MIN;
+    return Math.ceil(60000 / limit); // 60s / limit, rounded up
+  }
+
   async call<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
@@ -58,9 +93,14 @@ export class LeantimeClient {
       id: ++this.rpcId,
     };
 
+    let networkRetries = 0;
     let last429Delay = 0;
 
-    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    for (
+      let attempt = 0;
+      attempt <= MAX_429_RETRIES + MAX_NETWORK_RETRIES;
+      attempt++
+    ) {
       const response = await this.fetchFn(`${this.baseUrl}/api/jsonrpc`, {
         method: "POST",
         headers: {
@@ -70,19 +110,38 @@ export class LeantimeClient {
         body: JSON.stringify(request),
       });
 
-      if (response.status === 429) {
-        if (attempt < MAX_429_RETRIES) {
-          // Prefer the server's Retry-After; fall back to exponential backoff.
-          const headerDelay = this.parseRetryAfter(response);
-          const backoffDelay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-          last429Delay = headerDelay ?? backoffDelay;
-          await new Promise((r) => setTimeout(r, last429Delay));
+      // ---- Transient network errors (502/503/504): short retry ----
+      if ([502, 503, 504].includes(response.status)) {
+        if (networkRetries < MAX_NETWORK_RETRIES) {
+          networkRetries++;
+          const delay = networkRetries === 1 ? 500 : 1000;
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
         throw new Error(
+          `Leantime API error: ${response.status} ${response.statusText} ` +
+          `(retried ${MAX_NETWORK_RETRIES} times)`,
+        );
+      }
+
+      // ---- 429 rate limit: adaptive retry ----
+      if (response.status === 429) {
+        this.discoverRateLimit(response);
+
+        if (attempt < MAX_429_RETRIES) {
+          // Priority: Retry-After header > discovered rate limit delay > conservative default
+          const headerDelay = this.parseRetryAfter(response);
+          const rateLimitDelay = this.interRequestDelay;
+          last429Delay = headerDelay ?? Math.max(rateLimitDelay, 1000);
+          await new Promise((r) => setTimeout(r, last429Delay));
+          continue;
+        }
+        const limit = this.discoveredRateLimit ?? DEFAULT_RATE_LIMIT_PER_MIN;
+        throw new Error(
           `Rate limit exhausted after ${MAX_429_RETRIES} retries` +
-          (last429Delay > 0 ? ` (waited ${Math.round(last429Delay / 1000)}s)` : "") +
-          ` — the Leantime instance is throttling. Wait ~60 seconds before retrying.`,
+          (last429Delay > 0 ? ` (waited ~${Math.round(last429Delay / 1000)}s per retry)` : "") +
+          ` — the instance allows ~${limit} req/min. ` +
+          `Wait ~60 seconds or reduce the batch size.`,
         );
       }
 
