@@ -45,6 +45,33 @@ jobs:
         env:
           LEANTMCP_BIN: ./leantmcp.exe
 
+  smoke-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Unit & integration tests (macOS runtime)
+        run: deno task test:unit
+      - name: Compile native macOS binary
+        run: deno compile --allow-net --allow-env --allow-read --allow-write --output leantmcp src/main.ts
+      - name: Version check
+        run: ./leantmcp --version
+      - name: "Key flow — keyring on macOS"
+        run: |
+          export LEANTIME_API_KEY="lt_ci_dummy_key_0123456789abcdef"
+          ./leantmcp key set
+          ./leantmcp key show
+      - name: "URL flow"
+        run: |
+          ./leantmcp url set https://ci-instance.leantime.test
+          ./leantmcp url show
+      - name: MCP handshake smoke test
+        run: deno run --allow-run --allow-env scripts/smoke.ts
+        env:
+          LEANTMCP_BIN: ./leantmcp
+
   local-e2e:
     runs-on: ubuntu-latest
     steps:

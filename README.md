@@ -36,6 +36,19 @@ irm https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.ps1 | iex
 
 Binaries are self-contained (~80-110 MB): they embed the Deno/V8 runtime, so nothing else needs to be installed on the target machine. Both installers verify the published SHA-256 checksum before installing and abort on mismatch.
 
+## Platform support
+
+| Platform | Binaries | CI smoke | Full e2e |
+|----------|----------|----------|----------|
+| Linux x86_64 | ✓ | ✓ | ✓ (against a real Leantime instance at 10 req/min) |
+| Linux aarch64 | ✓ | — | — |
+| macOS (Intel / ARM) | ✓ | ✓ (since v1.9.1) | — |
+| Windows x86_64 | ✓ | ✓ (compile, key/URL flows, MCP handshake) | — |
+
+- **Linux** is the primary platform: fully tested in CI including the exhaustive e2e suite (all 40 tools, destructive gating, scoping regressions, bulk operations)
+- **Windows** is CI-tested on a real Windows runner (unit tests, native binary compilation, key/URL management, MCP handshake) — the full e2e suite requires Docker which isn't available on GitHub's Windows runners; manual testing on a real Windows machine is recommended
+- **macOS** is CI-tested on a real macOS runner (unit tests, native binary compilation, key/URL flows, MCP handshake) since v1.9.1; the code paths are identical to Linux (POSIX) so issues are unlikely
+
 ## How it works
 
 - `leantmcp` is a **stdio MCP server**: your harness (opencode, Claude Code, Claude Desktop, Cursor, Codex…) spawns it at session start and stops it at session end. No daemon, no port, nothing runs in the background.

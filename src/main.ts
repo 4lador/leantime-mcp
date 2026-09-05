@@ -26,7 +26,7 @@ import {
 import { IS_WINDOWS } from "./keyring.ts";
 import { setupHarnessCommand, type Harness } from "./harness.ts";
 
-const VERSION = "1.9.0";
+const VERSION = "1.9.1";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
