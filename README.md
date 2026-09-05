@@ -11,6 +11,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 ## Features
 
 - Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments and time tracking (37 tools)
+- **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — still zero secrets
 - Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor (no more wall-of-text tickets)
 - Mandatory assignment on ticket/milestone creation: the server rejects calls that don't assign a user (or explicitly opt out), so agents always ask who should own the task
 - Destructive operations gated behind explicit confirmation (`LEANTIME_MCP_DESTRUCTIVE_POLICY`)
@@ -79,15 +80,16 @@ The config a harness ends up with is simply:
 
 ### Multiple instances
 
-The keyring holds one default instance (top-level files). To manage **additional** Leantime instances, create named profiles:
+All credentials live in named profiles under `~/.config/leantime/instances/<name>/`. A `default` file names the default instance (used when no override is set).
 
 ```bash
 leantmcp instance add staging      # prompts for URL + key (hidden)
-leantmcp instance list             # profiles + masked keys + active
-leantmcp instance remove staging
+leantmcp instance list             # profiles + masked keys + default/active markers
+leantmcp instance use staging      # set staging as the default instance
+leantmcp instance remove staging   # refuses to remove the current default
 ```
 
-Profiles live in `~/.config/leantime/instances/<name>/`. Any command — and any server spawn — targets a profile via `LEANTIME_INSTANCE`:
+Any command — and any server spawn — targets a profile via `LEANTIME_INSTANCE`:
 
 ```bash
 LEANTIME_INSTANCE=staging leantmcp key rotate   # rotates staging's key
@@ -104,7 +106,7 @@ In a harness config, declare one server per instance — still zero secrets:
 }
 ```
 
-Resolution order: `LEANTIME_URL`/`LEANTIME_API_KEY` env (explicit override) → `LEANTIME_INSTANCE` profile → default top-level files.
+Resolution order: `LEANTIME_URL`/`LEANTIME_API_KEY` env (explicit override) → `LEANTIME_INSTANCE` profile → the `default` file (names the default instance profile).
 
 ## Rich text (Markdown)
 
@@ -223,12 +225,12 @@ Project hiding/deletion is intentionally not exposed: Leantime's API has no proj
 
 ## Key management
 
-Configuration lives in one place — `~/.config/leantime/` (`api-key`, 0600, and `instance-url`). The opencode configs only hold `{file:...}` pointers, so they contain no secrets and are safe to commit as-is.
+Configuration lives in named instance profiles — `~/.config/leantime/instances/<name>/` (`api-key`, 0600, and `instance-url`), with a `default` file naming the default. The opencode configs only hold `{file:...}` pointers, so they contain no secrets and are safe to commit as-is.
 
 ```bash
 leantmcp url set https://your-instance.leantime.io   # instance URL (argument OK — not a secret)
 leantmcp url show                                     # resolved URL + where it comes from
-leantmcp key set      # hidden prompt (or LEANTIME_API_KEY env var) → ~/.config/leantime/api-key (0600)
+leantmcp key set      # hidden prompt (or LEANTIME_API_KEY env var) → instances/<name>/api-key (0600)
 leantmcp setup global # config then only holds "{file:...}" pointers
 leantmcp key show     # masked display (lt_h13…Fc3O)
 leantmcp key test     # live validation against the instance

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.1 — Documentation sync with normalized instance structure
+
+- README: Key management and Multiple instances sections now reference `instances/<name>/` paths and the `default` file (not top-level); `instance use` documented; multi-instance added to Features
+- Help text: `instance use` added; key/URL paths reference instance profiles; serve resolution description updated (keyring, not .env)
+
 ## v1.7.0 — Normalized instance structure
 
 - All credentials now live under `~/.config/leantime/instances/<name>/` — the top-level files are gone; a `default` file names the default instance

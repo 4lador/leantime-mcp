@@ -26,7 +26,7 @@ import {
 import { IS_WINDOWS } from "./keyring.ts";
 import { setupHarnessCommand, type Harness } from "./harness.ts";
 
-const VERSION = "1.7.0";
+const VERSION = "1.7.1";
 
 export function showHelp() {
   console.log(`leantmcp v${VERSION} — Leantime MCP Server
@@ -42,22 +42,24 @@ COMMANDS
   setup claude-desktop  Write claude_desktop_config.json (bare command, no secrets)
   setup cursor       Write ~/.cursor/mcp.json (bare command, no secrets)
   setup codex        Append [mcp_servers.leantime] to ~/.codex/config.toml
-  key set            Store the API key in ~/.config/leantime/api-key (0600, hidden prompt)
+  key set            Store the API key (0600, hidden prompt) in the active instance profile
   key show           Show the stored key, masked
   key test           Validate the stored key against the instance
   key rotate         Mint a new key (same role), verify it live, replace the stored one
   url set <url>      Set the Leantime instance URL (configs with pointers follow automatically)
   url show           Show the resolved instance URL and its source
   instance add <n>   Add a named instance profile (~/.config/leantime/instances/<n>/)
-  instance list      List instance profiles (masked)
-  instance remove <n>  Remove an instance profile
+  instance list      List instance profiles (masked keys, default/active markers)
+  instance use <n>   Set the default instance profile
+  instance remove <n>  Remove an instance profile (refuses the current default)
   doctor             Health check: key file, config, live key validation
 
 Set LEANTIME_INSTANCE=<name> on any command (or server spawn) to target a
-named instance profile — without it, the top-level keyring is used.
+named instance profile — without it, the instance named in the "default"
+file is used.
 
 All harness configs use a bare command: the binary resolves credentials from
-~/.config/leantime/ at startup — no secrets in any config file.
+~/.config/leantime/instances/ at startup — no secrets in any config file.
   --help, -h         Show this help
   --version, -v      Show version
 
@@ -78,7 +80,8 @@ SETUP
   set to skip prompts.
 
 SERVE
-  Reads LEANTIME_URL and LEANTIME_API_KEY from environment or .env file.
+  Credentials resolve from the environment (override) or the active
+  instance profile in ~/.config/leantime/instances/.
   Communicates over stdin/stdout (stdio transport).`);
 }
 
