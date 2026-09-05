@@ -2,6 +2,9 @@ import type { JsonRpcRequest, JsonRpcResponse, LeantimeStatusMap } from "./types
 
 export type FetchFn = typeof globalThis.fetch;
 
+/** Maximum retries on 429 rate limit before giving up with a clear error. */
+const MAX_429_RETRIES = 3;
+
 export class LeantimeClient {
   private baseUrl: string;
   private apiKey: string;
@@ -20,6 +23,30 @@ export class LeantimeClient {
     this.fetchFn = fetchFn ?? globalThis.fetch;
   }
 
+  /**
+   * Parse Retry-After / X-RateLimit-Retry-After headers into milliseconds.
+   * Handles both "seconds" format and HTTP-date format.
+   * Returns null when no usable header is present (caller falls back to
+   * exponential backoff).
+   */
+  private parseRetryAfter(response: Response): number | null {
+    const ra = response.headers.get("Retry-After");
+    if (ra) {
+      const secs = parseInt(ra, 10);
+      if (!isNaN(secs) && secs >= 0) return secs * 1000;
+      const date = new Date(ra);
+      if (!isNaN(date.getTime())) {
+        return Math.max(0, date.getTime() - Date.now());
+      }
+    }
+    const xlra = response.headers.get("X-RateLimit-Retry-After");
+    if (xlra) {
+      const secs = parseInt(xlra, 10);
+      if (!isNaN(secs) && secs >= 0) return secs * 1000;
+    }
+    return null;
+  }
+
   async call<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
@@ -31,30 +58,53 @@ export class LeantimeClient {
       id: ++this.rpcId,
     };
 
-    const response = await this.fetchFn(`${this.baseUrl}/api/jsonrpc`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-      },
-      body: JSON.stringify(request),
-    });
+    let last429Delay = 0;
 
-    if (!response.ok) {
-      throw new Error(
-        `Leantime API error: ${response.status} ${response.statusText}`,
-      );
+    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+      const response = await this.fetchFn(`${this.baseUrl}/api/jsonrpc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.apiKey,
+        },
+        body: JSON.stringify(request),
+      });
+
+      if (response.status === 429) {
+        if (attempt < MAX_429_RETRIES) {
+          // Prefer the server's Retry-After; fall back to exponential backoff.
+          const headerDelay = this.parseRetryAfter(response);
+          const backoffDelay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+          last429Delay = headerDelay ?? backoffDelay;
+          await new Promise((r) => setTimeout(r, last429Delay));
+          continue;
+        }
+        throw new Error(
+          `Rate limit exhausted after ${MAX_429_RETRIES} retries` +
+          (last429Delay > 0 ? ` (waited ${Math.round(last429Delay / 1000)}s)` : "") +
+          ` — the Leantime instance is throttling. Wait ~60 seconds before retrying.`,
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `Leantime API error: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const json: JsonRpcResponse<T> = await response.json();
+
+      if (json.error) {
+        throw new Error(
+          `Leantime RPC error [${json.error.code}]: ${json.error.message}${json.error.data ? ` — ${json.error.data}` : ""}`,
+        );
+      }
+
+      return json.result as T;
     }
 
-    const json: JsonRpcResponse<T> = await response.json();
-
-    if (json.error) {
-      throw new Error(
-        `Leantime RPC error [${json.error.code}]: ${json.error.message}${json.error.data ? ` — ${json.error.data}` : ""}`,
-      );
-    }
-
-    return json.result as T;
+    // Unreachable (loop always returns or throws), but TypeScript needs it
+    throw new Error("LeantimeClient: unreachable state");
   }
 
   async getStatusMap(projectId: string): Promise<LeantimeStatusMap> {

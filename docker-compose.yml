@@ -40,7 +40,9 @@ services:
       LEAN_DB_PORT: "3306"
       LEAN_SESSION_PASSWORD: "dev-only-session-password-change-me"
       LEAN_SESSION_SECURE: "false"
-      # Default is 10 req/min — far too low for automated tests
+      # Default is 10 req/min — too low for automated testing; 120 is
+      # generous enough for the e2e suite while still exercising the
+      # client's 429 retry mechanism.
       LEAN_RATELIMIT_API: "120"
       LEAN_SITENAME: "leantime-mcp dev"
     volumes:

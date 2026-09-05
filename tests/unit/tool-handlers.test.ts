@@ -347,7 +347,7 @@ Deno.test("tool handler — error wrapping on RPC error", async () => {
   assertEquals((content.text as string).includes("Access denied"), true);
 });
 
-Deno.test("tool handler — all 37 tools are registered", () => {
+Deno.test("tool handler — all 40 tools are registered", () => {
   const { mockServer, tools } = createToolRegistry();
   const { fetch: mockFetch } = createMockFetch();
   const client = new LeantimeClient("https://leantime.test", "key", mockFetch);
@@ -391,7 +391,10 @@ Deno.test("tool handler — all 37 tools are registered", () => {
     "leantime_get_ticket_time",
     "leantime_list_timesheets",
     "leantime_delete_timesheet_entry",
+    "leantime_bulk_create_tickets",
+    "leantime_bulk_update_tickets",
+    "leantime_bulk_schedule_tickets",
   ];
   assertEquals([...tools.keys()].sort(), expected.sort());
-  assertEquals(tools.size, 37);
+  assertEquals(tools.size, 40);
 });

@@ -10,8 +10,9 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 ## Features
 
-- Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments and time tracking (37 tools)
+- Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments, time tracking and **bulk operations** (40 tools)
 - **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — still zero secrets
+- **Automatic 429 retry**: the client retries rate-limited requests with header-aware backoff (up to 3 retries) — agents never need to handle rate limiting
 - Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor (no more wall-of-text tickets)
 - Mandatory assignment on ticket/milestone creation: the server rejects calls that don't assign a user (or explicitly opt out), so agents always ask who should own the task
 - Destructive operations gated behind explicit confirmation (`LEANTIME_MCP_DESTRUCTIVE_POLICY`)
@@ -243,6 +244,18 @@ leantmcp doctor       # health check: key file, permissions, config, live key
 - Rotating: `leantmcp key rotate` (same role, live-verified before replacing anything), then delete the old key in the Leantime UI
 - Environment variables (`LEANTIME_URL`, `LEANTIME_API_KEY`) remain the per-run override mechanism — e.g. targeting the local docker instance for e2e tests
 - The key is never accepted as a command-line argument (shell history), never logged, and key commands are CLI-only — they are not exposed as MCP tools
+
+**Bulk operations**
+
+| Tool | Description |
+|------|-------------|
+| `leantime_bulk_create_tickets` | Create up to 50 tickets — validated upfront, Markdown converted, per-item results |
+| `leantime_bulk_update_tickets` | Update up to 50 tickets via safe patch — per-item results |
+| `leantime_bulk_schedule_tickets` | Schedule up to 50 tickets (sprint, dates) via patch |
+
+## Rate limit handling
+
+The MCP server automatically retries on `429 Too Many Requests` responses from the Leantime API — up to 3 retries with intelligent backoff (reads the `Retry-After` / `X-RateLimit-Retry-After` headers when present, falls back to exponential backoff). Agents never need to handle rate limiting themselves. If a rate limit error still surfaces after all retries, the error message instructs waiting ~60 seconds.
 
 ## Getting your Leantime API key
 

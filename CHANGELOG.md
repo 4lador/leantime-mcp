@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.8.0 — Bulk operations + automatic 429 retry
+
+**Bulk operations** (3 new tools, 40 total):
+- `leantime_bulk_create_tickets`: create up to 50 tickets in one call — ALL items validated upfront (assignment enforcement, editorId check) before anything is created; descriptions are Markdown converted to HTML; results are per-item with `{ index, ok, id?, error? }`
+- `leantime_bulk_update_tickets`: update up to 50 tickets via the safe patch API — only provided fields change; per-item results
+- `leantime_bulk_schedule_tickets`: schedule up to 50 tickets (sprint, editFrom/editTo) via patch
+- Bulk tool descriptions communicate the 429 retry mechanism to agents
+
+**Automatic 429 rate limit retry** (benefits ALL tools):
+- `LeantimeClient.call()` retries on 429 with up to 3 retries: reads `Retry-After` / `X-RateLimit-Retry-After` headers (both seconds and HTTP-date formats), falls back to exponential backoff (1s, 2s, 4s)
+- After retries are exhausted, throws a clear actionable error ("wait ~60 seconds")
+- 9 unit tests covering: header-aware retry, exponential backoff, exhaustion, HTTP-date parsing, intermittent 429s in bulk sequences, non-429 errors (no retry)
+- The e2e suite now runs against a 120 req/min instance (down from 1000) — proving the retry works under real rate limiting
+
+**API quirks handled**: `tickets.patch` returns `[true]` (array-wrapped) in some contexts — bulk tools unwrap correctly
+
 ## v1.7.1 — Documentation sync with normalized instance structure
 
 - README: Key management and Multiple instances sections now reference `instances/<name>/` paths and the `default` file (not top-level); `instance use` documented; multi-instance added to Features

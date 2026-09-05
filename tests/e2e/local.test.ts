@@ -371,6 +371,133 @@ Deno.test({
 });
 
 Deno.test({
+  name: "local e2e — bulk operations: create, update, schedule",
+  ignore: !ready,
+  fn: async () => {
+    const pid = state.projects[0];
+    console.log("  [bulk] projectId:", JSON.stringify(pid), "type:", typeof pid);
+
+    // Use a FRESH client for bulk operations (isolate from shared client state)
+    const bulkClient = new LeantimeClient(URL_, KEY);
+    const bulkTools = new Map<string, (p: Record<string, unknown>) => Promise<unknown>>();
+    registerAllTools(
+      { tool: (n, _d, _s, h) => bulkTools.set(n, h) } as never,
+      bulkClient,
+    );
+    const bulkCall = async (name: string, args: Record<string, unknown>) => {
+      const r = await bulkTools.get(name)!(args) as {
+        content: { text: string }[];
+        isError?: boolean;
+      };
+      const text = r.content[0].text;
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(text); } catch { /* error text */ }
+      return { isError: r.isError === true, text, parsed };
+    };
+
+    // DIRECT API test (bypassing tool handler) to isolate the issue
+    const directResult = await bulkClient.call<unknown>("tickets.addTicket", {
+      values: { headline: "direct-bulk-test", projectId: Number(pid), type: "task", editorId: "1" },
+    });
+    if (Array.isArray(directResult)) {
+      capture("tickets", directResult[0]);
+    }
+
+    // Bulk create: 9 tickets (mix assigned/unassigned, markdown)
+    const specs: Record<string, unknown>[] = Array.from({ length: 9 }, (_, i) => ({
+      headline: `bulk ticket ${i + 1}`,
+      editorId: i % 2 === 0 ? "1" : undefined,
+      unassigned: i % 2 !== 0 ? true : undefined,
+      description: `**Bulk** ticket ${i + 1}\n\n- [ ] étape`,
+      type: "task",
+    }));
+
+    const created = await bulkCall("leantime_bulk_create_tickets", {
+      projectId: pid,
+      tickets: specs.slice(0, 9), // first 9 without parent link
+    });
+    ok(created);
+    const bulkResult = created.parsed as {
+      summary: { created: number; failed: number };
+      results: { index: number; ok: boolean; id?: string; error?: string }[];
+    };
+    if (bulkResult.summary.created !== 9) {
+      console.error("BULK ERRORS:", JSON.stringify(bulkResult.results.filter((r) => !r.ok), null, 2));
+    }
+    assertEquals(bulkResult.summary.created, 9);
+    assertEquals(bulkResult.summary.failed, 0);
+
+    // Capture all bulk-created ids
+    const bulkIds = bulkResult.results.filter((r) => r.ok && r.id).map((r) => {
+      return capture("tickets", r.id);
+    });
+
+    // Create the subtask linked to the first bulk ticket
+    const sub = await bulkCall("leantime_bulk_create_tickets", {
+      projectId: pid,
+      tickets: [{ headline: "bulk subtask", unassigned: true, dependingTicketId: bulkIds[0] }],
+    });
+    ok(sub);
+    const subResult = sub.parsed as { results: { id?: string }[] };
+    capture("tickets", subResult.results[0].id);
+
+    // Bulk validation: one bad item → zero creation
+    const rejected = await bulkCall("leantime_bulk_create_tickets", {
+      projectId: pid,
+      tickets: [
+        { headline: "OK", unassigned: true },
+        { headline: "BAD" }, // no assignment
+      ],
+    });
+    assertEquals(rejected.isError, true);
+    assertEquals(rejected.text.includes("NOTHING was created"), true);
+
+    // Bulk update: change status of first 5
+    const updates = bulkIds.slice(0, 5).map((id) => ({
+      ticketId: id,
+      status: 0, // Terminé
+      headline: `bulk ticket updated`,
+    }));
+    const updated = await bulkCall("leantime_bulk_update_tickets", {
+      projectId: pid,
+      updates,
+    });
+    ok(updated);
+    const updateResult = updated.parsed as {
+      summary: { created: number; failed: number };
+      results: { index: number; ok: boolean; error?: string }[];
+    };
+    if (updateResult.summary.created !== 5) {
+      console.error("UPDATE ERRORS:", JSON.stringify(updateResult.results.filter((r) => !r.ok), null, 2));
+    }
+    assertEquals(updateResult.summary.created, 5);
+
+    // Verify one updated ticket
+    const check = await call("leantime_get_ticket", { projectId: pid, ticketId: bulkIds[0] });
+    const t = check.parsed as { status: number; headline: string };
+    assertEquals(t.status, 0);
+
+    // Bulk schedule: assign sprint to first 3
+    const schedules = bulkIds.slice(0, 3).map((id) => ({
+      ticketId: id,
+      sprintId: state.sprint!,
+    }));
+    const scheduled = await bulkCall("leantime_bulk_schedule_tickets", {
+      projectId: pid,
+      schedules,
+    });
+    ok(scheduled);
+    const schedResult = scheduled.parsed as { summary: { created: number } };
+    assertEquals(schedResult.summary.created, 3);
+
+    // Verify sprint assignment
+    const checkSprint = await call("leantime_get_ticket", { projectId: pid, ticketId: bulkIds[0] });
+    const ts = checkSprint.parsed as { sprint: string };
+    assertEquals(String(ts.sprint), state.sprint!);
+  },
+});
+
+Deno.test({
   name: "local e2e — destructive gating: rejected without confirm, executed with",
   ignore: !ready,
   fn: async () => {

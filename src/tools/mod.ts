@@ -7,6 +7,7 @@ import { registerUserTools } from "./users.ts";
 import { registerCommentTools } from "./comments.ts";
 import { registerTimesheetTools } from "./timesheets.ts";
 import { registerSprintTools } from "./sprints.ts";
+import { registerBulkTools } from "./bulk.ts";
 
 export function registerAllTools(server: McpServer, client: LeantimeClient) {
   registerProjectTools(server, client);
@@ -16,4 +17,5 @@ export function registerAllTools(server: McpServer, client: LeantimeClient) {
   registerCommentTools(server, client);
   registerTimesheetTools(server, client);
   registerSprintTools(server, client);
+  registerBulkTools(server, client);
 }
