@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -362,6 +363,8 @@ pub fn write_disabled_tools(tools: &[String]) -> std::io::Result<()> {
 
 /// Octal mode string (unix) or None (Windows uses ACLs).
 pub fn file_mode(path: &Path) -> Option<String> {
+    #[allow(unused_variables, clippy::needless_pass_by_value)]
+    let _path = path; // used only on unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
