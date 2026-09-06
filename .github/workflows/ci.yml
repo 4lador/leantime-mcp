@@ -65,18 +65,19 @@ jobs:
         shell: pwsh
         run: |
           $env:LEANTIME_API_KEY = "lt_ci_dummy_key_0123456789abcdef"
-          ./target/release/leantmcp.exe key set
-          if (-not ($("./target/release/leantmcp.exe" key show) -match "lt_ci")) { throw "key show failed" }
+          & ./target/release/leantmcp.exe key set
+          $output = & ./target/release/leantmcp.exe key show
+          if ($output -notmatch "lt_ci") { throw "key show failed" }
       - name: URL flow
         shell: pwsh
         run: |
-          ./target/release/leantmcp.exe url set https://ci-instance.leantime.test
-          $shown = ./target/release/leantmcp.exe url show
+          & ./target/release/leantmcp.exe url set https://ci-instance.leantime.test
+          $shown = & ./target/release/leantmcp.exe url show
           if ($shown -notmatch "ci-instance") { throw "url show failed" }
       - name: MCP handshake (assert the response actually matches)
         shell: pwsh
         run: |
-          $resp = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | ./target/release/leantmcp.exe serve 2>$null
+          $resp = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | & ./target/release/leantmcp.exe serve 2>$null
           if (-not ($resp | Select-String 'leantime-mcp')) { throw "handshake failed" }
 
   smoke-macos:
