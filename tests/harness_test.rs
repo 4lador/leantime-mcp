@@ -242,7 +242,12 @@ fn setup_opencode_named_instance_pointer() {
     let key_ptr = v["mcp"]["leantime"]["environment"]["LEANTIME_API_KEY"]
         .as_str()
         .unwrap();
-    assert!(key_ptr.contains("instances/prod"), "{key_ptr}");
+    // Path separator differs between platforms (Unix / vs Windows \)
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(
+        key_ptr.contains(&format!("instances{sep}prod")),
+        "{key_ptr}"
+    );
 
     std::env::set_current_dir(cwd).unwrap();
     std::env::remove_var("LEANTIME_INSTANCE");
