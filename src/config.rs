@@ -6,8 +6,16 @@ use std::path::{Path, PathBuf};
 // Paths
 // ---------------------------------------------------------------------------
 
-/// Home directory of the current user.
+/// Home directory of the current user. On Windows, checks `USERPROFILE`
+/// first so tests (and users) can redirect it via the environment —
+/// `dirs::home_dir()` uses the Windows API and ignores the env var.
 pub fn home_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(up) = std::env::var_os("USERPROFILE") {
+        if !up.is_empty() {
+            return PathBuf::from(up);
+        }
+    }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
