@@ -1,0 +1,52 @@
+# Local Leantime instance for developing and testing (docker compose up -d).
+# Pinned to the version the MCP is validated against; the API rate limit is
+# deliberately left at Leantime's real default (10 req/min) so the e2e suite
+# exercises the client's adaptive retry against production conditions.
+#
+# For a fully automated setup (first-run wizard + dedicated API key):
+#   bash scripts/local-instance-bootstrap.sh     # prints the key on the last line
+
+services:
+  leantime-db:
+    image: mysql:8.4
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: leantime
+      MYSQL_USER: leantime
+      MYSQL_PASSWORD: leantime-dev
+      MYSQL_ROOT_PASSWORD: root-dev
+    volumes:
+      - leantime-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  leantime:
+    image: leantime/leantime:3.7.3
+    depends_on:
+      leantime-db:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      LEAN_DB_HOST: leantime-db
+      LEAN_DB_USER: leantime
+      LEAN_DB_PASSWORD: leantime-dev
+      LEAN_DB_DATABASE: leantime
+      LEAN_DB_PORT: "3306"
+      LEAN_SESSION_PASSWORD: "dev-only-session-password-change-me"
+      LEAN_SESSION_SECURE: "false"
+      # 10 req/min = Leantime's default — the e2e suite exercises the
+      # client's adaptive rate limit retry against the real default.
+      LEAN_RATELIMIT_API: "10"
+      LEAN_SITENAME: "leantime-mcp dev"
+    volumes:
+      - leantime-userfiles:/var/www/html/userfiles
+      - leantime-backups:/var/www/html/backupdb
+
+volumes:
+  leantime-db:
+  leantime-userfiles:
+  leantime-backups:

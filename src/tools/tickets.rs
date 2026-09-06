@@ -1,0 +1,296 @@
+use std::future::Future;
+use std::pin::Pin;
+
+use serde_json::{json, Value};
+
+use crate::markdown::markdown_to_html;
+
+use super::shared::*;
+use super::{error_result, ok_result, rpc, ClientRef, Tool, ToolAnnotations};
+
+fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        // Leantime expects filters inside a `searchCriteria` object — flat
+        // params are silently ignored and would return every ticket.
+        let mut sc = json!({ "currentProject": pid });
+        if let Some(v) = a.get("status") {
+            sc["status"] = v.clone();
+        }
+        if let Some(v) = a.get("milestoneId") {
+            sc["milestone"] = v.clone();
+        }
+        if let Some(v) = a.get("sprintId") {
+            sc["sprint"] = v.clone();
+        }
+        if let Some(v) = a.get("userId") {
+            sc["users"] = v.clone();
+        }
+        if let Some(v) = a.get("type") {
+            sc["type"] = v.clone();
+        }
+        if let Some(v) = a.get("search") {
+            sc["term"] = v.clone();
+        }
+
+        match c
+            .call(
+                "tickets.getAll",
+                json!({ "searchCriteria": sc, "limit": 500 }),
+            )
+            .await
+        {
+            Ok(r) => {
+                let sm = c.get_status_map(pid).await.unwrap_or(json!({}));
+                let mut items = r.as_array().cloned().unwrap_or_default();
+                c.enrich_with_statuses(&mut items, &sm);
+                ok_result(&json!(items))
+            }
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_get_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let tid = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
+        match c.call("tickets.getTicket", json!({"id": tid})).await {
+            Ok(mut r) => {
+                c.enrich_single_with_statuses(&mut r, pid).await;
+                ok_result(&r)
+            }
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let users = match get_users_simplified(&mut c).await {
+            Ok(u) => u,
+            Err(e) => return error_result(&e),
+        };
+        if let Err(e) = check_assignment(&a, &users) {
+            return error_result(&e);
+        }
+
+        let mut v = json!({ "headline": a.get("headline"), "projectId": a.get("projectId") });
+        if let Some(d) = a.get("description").and_then(|x| x.as_str()) {
+            v["description"] = json!(markdown_to_html(d));
+        }
+        for (k, dst) in [
+            ("type", "type"),
+            ("priority", "priority"),
+            ("status", "status"),
+            ("editorId", "editorId"),
+            ("tags", "tags"),
+            ("storypoints", "storypoints"),
+            ("dateToFinish", "dateToFinish"),
+            ("planHours", "planHours"),
+            ("dependingTicketId", "dependingTicketId"),
+        ] {
+            if let Some(x) = a.get(k) {
+                v[dst] = x.clone();
+            }
+        }
+        if let Some(x) = a.get("milestoneId") {
+            v["milestoneid"] = x.clone();
+        }
+        if let Some(x) = a.get("sprintId") {
+            v["sprint"] = x.clone();
+        }
+
+        match c.call("tickets.addTicket", json!({ "values": v })).await {
+            Ok(r) => {
+                if is_leantime_error(&r) {
+                    return error_result(&leantime_error_msg(&r));
+                }
+                let id = r.as_array().and_then(|x| x.first()).cloned().unwrap_or(r);
+                ok_result(&json!({ "id": id }))
+            }
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_update_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let tid = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(editor_id) = a.get("editorId") {
+            if !editor_id.is_null() {
+                let users = match get_users_simplified(&mut c).await {
+                    Ok(u) => u,
+                    Err(e) => return error_result(&e),
+                };
+                if let Err(e) = check_editor_id(editor_id, &users) {
+                    return error_result(&e);
+                }
+            }
+        }
+        let mut ch = json!({});
+        if let Some(v) = a.get("headline") {
+            ch["headline"] = v.clone();
+        }
+        if let Some(d) = a.get("description").and_then(|x| x.as_str()) {
+            ch["description"] = json!(markdown_to_html(d));
+        }
+        for (k, dst) in [
+            ("type", "type"),
+            ("priority", "priority"),
+            ("status", "status"),
+            ("editorId", "editorId"),
+            ("tags", "tags"),
+            ("storypoints", "storypoints"),
+            ("dateToFinish", "dateToFinish"),
+            ("planHours", "planHours"),
+            ("dependingTicketId", "dependingTicketId"),
+        ] {
+            if let Some(x) = a.get(k) {
+                ch[dst] = x.clone();
+            }
+        }
+        if let Some(x) = a.get("milestoneId") {
+            ch["milestoneid"] = x.clone();
+        }
+        if let Some(x) = a.get("sprintId") {
+            ch["sprint"] = x.clone();
+        }
+
+        if ch.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return error_result("Nothing to update: provide at least one field to change.");
+        }
+        match c
+            .call("tickets.patch", json!({ "id": tid, "params": ch }))
+            .await
+        {
+            Ok(r) => ok_result(&json!({ "ok": r == json!(true), "id": tid })),
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_delete_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        if let Err(e) = check_destructive(a.get("confirm").and_then(|v| v.as_bool()), "ticket") {
+            return error_result(&e);
+        }
+        let mut c = cl.lock().await;
+        let id = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
+        match c.call("tickets.delete", json!({ "id": id })).await {
+            Ok(r) => {
+                if is_leantime_error(&r) {
+                    return error_result(&leantime_error_msg(&r));
+                }
+                ok_result(&json!({ "deleted": true, "ticketId": id }))
+            }
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_list_subtasks(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let tid = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
+        match c
+            .call("tickets.getAllSubtasks", json!({"ticketId": tid}))
+            .await
+        {
+            Ok(r) => ok_result(&json!(r.as_array().cloned().unwrap_or_default())),
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_my_tasks(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        // Param is `project` (not projectId) — must match the service signature.
+        let mut p = json!({});
+        if let Some(v) = a
+            .get("userId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            p["userId"] = json!(v);
+        }
+        if let Some(v) = a
+            .get("projectId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            p["project"] = json!(v);
+        }
+        match c.call("tickets.getAllOpenUserTickets", p).await {
+            Ok(r) => ok_result(&json!(r.as_array().cloned().unwrap_or_default())),
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+fn h_get_ticket_options(_a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let p = c.call("tickets.getPriorityLabels", json!({})).await;
+        let e = c.call("tickets.getEffortLabels", json!({})).await;
+        let k = c.call("tickets.getKanbanColumns", json!({})).await;
+        let t = c.call("tickets.getTicketTypes", json!({})).await;
+        match (p, e, k, t) {
+            (Ok(p), Ok(e), Ok(k), Ok(t)) => {
+                ok_result(&json!({"priorities": p, "efforts": e, "kanban": k, "types": t}))
+            }
+            _ => error_result("Failed to fetch options"),
+        }
+    })
+}
+
+fn h_get_ticket_types(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        match c
+            .call("tickets.getTicketTypes", json!({"projectId": pid}))
+            .await
+        {
+            Ok(r) => ok_result(&r),
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
+pub(super) fn tools() -> Vec<Tool> {
+    let md = MARKDOWN_HINT;
+    let assignment = ASSIGNMENT_HINT;
+    vec![
+        tool("leantime_list_tickets", "List tickets/tasks for a project with optional filters",
+            vec![rs("projectId", "The project ID to list tickets for"), os("status", "Filter by status name or ID"), os("milestoneId", "Filter by milestone ID"), os("sprintId", "Filter by sprint ID"), os("userId", "Filter by assigned user ID"), os("type", "Filter by ticket type (task, story, bug, etc.)"), os("search", "Search term for ticket headline/description")],
+            vec!["projectId"], Box::new(h_list_tickets)),
+        tool("leantime_get_ticket", "Get details of a specific ticket/task",
+            vec![rs("projectId", "The project ID"), rs("ticketId", "The ticket ID")], vec!["projectId", "ticketId"], Box::new(h_get_ticket)),
+        tool_with_annotations("leantime_create_ticket", format!("Create a new ticket/task in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned.", md, assignment),
+            vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate")],
+            vec!["projectId", "headline"], Box::new(h_create_ticket), ToolAnnotations::write()),
+        tool_with_annotations("leantime_update_ticket", format!("Update an existing ticket/task. Only the provided fields are changed (Leantime's patch API — other fields are never wiped). The description is {} and replaces the previous description entirely. Only set editorId when you intend to change the assignment (validate user IDs with leantime_list_users).", md),
+            vec![rs("ticketId", "The ticket ID"), os("headline", "New ticket title"), os("description", format!("New description in {}", md)), os("type", "New ticket type"), on("status", "New status ID"), on("priority", "New priority (1-5)"), os("milestoneId", "New milestone ID"), os("sprintId", "New sprint ID"), os("editorId", "New assigned user ID (validates against leantime_list_users)"), os("tags", "New comma-separated tags"), os("storypoints", "New story points"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate")],
+            vec!["ticketId"], Box::new(h_update_ticket), ToolAnnotations::write()),
+        tool_with_annotations("leantime_delete_ticket", "Delete a ticket. Destructive: requires explicit user approval (confirm: true) unless LEANTIME_MCP_DESTRUCTIVE_POLICY is set otherwise. Prefer updating the status to a 'done/cancelled' state when possible.",
+            vec![rs("ticketId", "The ticket ID"), ob("confirm", "MUST be true to actually delete (ask the user for explicit approval first)")],
+            vec!["ticketId"], Box::new(h_delete_ticket), ToolAnnotations::destructive()),
+        tool("leantime_list_subtasks", "List the subtasks of a ticket (create subtasks with leantime_create_ticket and dependingTicketId)",
+            vec![rs("ticketId", "The parent ticket ID")], vec!["ticketId"], Box::new(h_list_subtasks)),
+        tool("leantime_my_tasks", "List the open tickets assigned to a user (defaults to the API key owner) — the 'what's on my plate' view",
+            vec![os("userId", "User ID (defaults to the API key owner)"), os("projectId", "Restrict to one project")], vec![], Box::new(h_my_tasks)),
+        tool("leantime_get_ticket_options", "Get the pick-list options for tickets of a project: priorities, efforts (story points), kanban columns and ticket types",
+            vec![rs("projectId", "The project ID")], vec!["projectId"], Box::new(h_get_ticket_options)),
+        tool("leantime_get_statuses", "Get available status labels for a project",
+            vec![rs("projectId", "The project ID")], vec!["projectId"],
+            rpc("tickets.getStatusLabels", |a: &Value| json!({"projectId": a.get("projectId")}))),
+        tool("leantime_get_ticket_types", "Get available ticket types",
+            vec![rs("projectId", "The project ID")], vec!["projectId"], Box::new(h_get_ticket_types)),
+    ]
+}

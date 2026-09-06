@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --release --locked
+      - name: Run tests
+        run: cargo test
+      - name: Version check
+        run: ./target/release/leantmcp --version
+      - name: Keyring flow
+        run: |
+          export LEANTIME_API_KEY="lt_ci_dummy_key_0123456789abcdef"
+          ./target/release/leantmcp key set
+          ./target/release/leantmcp key show | grep -q "lt_ci"
+      - name: URL flow
+        run: |
+          ./target/release/leantmcp url set https://ci-instance.leantime.test
+          ./target/release/leantmcp url show | grep -q "ci-instance"
+      - name: MCP handshake smoke test
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | \
+            ./target/release/leantmcp serve 2>/dev/null | grep -q 'leantime-mcp'
+
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test
+      - name: Version check
+        run: ./target/release/leantmcp.exe --version
+      - name: Keyring flow
+        shell: pwsh
+        run: |
+          $env:LEANTIME_API_KEY = "lt_ci_dummy_key_0123456789abcdef"
+          ./target/release/leantmcp.exe key set
+          if (-not ($("./target/release/leantmcp.exe" key show) -match "lt_ci")) { throw "key show failed" }
+      - name: URL flow
+        shell: pwsh
+        run: |
+          ./target/release/leantmcp.exe url set https://ci-instance.leantime.test
+          $shown = ./target/release/leantmcp.exe url show
+          if ($shown -notmatch "ci-instance") { throw "url show failed" }
+      - name: MCP handshake (assert the response actually matches)
+        shell: pwsh
+        run: |
+          $resp = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | ./target/release/leantmcp.exe serve 2>$null
+          if (-not ($resp | Select-String 'leantime-mcp')) { throw "handshake failed" }
+
+  smoke-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test
+      - name: Version check
+        run: ./target/release/leantmcp --version
+      - name: Keyring flow
+        run: |
+          export LEANTIME_API_KEY="lt_ci_dummy_key_0123456789abcdef"
+          ./target/release/leantmcp key set
+          ./target/release/leantmcp key show | grep -q "lt_ci"
+      - name: URL flow
+        run: |
+          ./target/release/leantmcp url set https://ci-instance.leantime.test
+          ./target/release/leantmcp url show | grep -q "ci-instance"
+      - name: MCP handshake smoke test
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' | \
+            ./target/release/leantmcp serve 2>/dev/null | grep -q 'leantime-mcp'
+
+  msrv:
+    # Verify the declared rust-version actually builds (committed Cargo.lock
+    # makes this reproducible — transitive deps keep raising their MSRVs).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check at MSRV
+        run: cargo check --all-targets --locked
+
+  local-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Run unit tests (e2e gate is opt-in below)
+        run: cargo test
+      - name: Start Leantime (docker compose)
+        run: docker compose up -d
+      - name: Bootstrap instance
+        run: set -o pipefail && bash scripts/local-instance-bootstrap.sh | tail -1 > /tmp/key
+      - name: Smoke e2e (binary-level MCP checks)
+        run: |
+          export LEANTIME_URL=http://localhost:8090
+          export LEANTIME_API_KEY="$(cat /tmp/key)"
+          bash tests/e2e/run.sh
+      - name: Exhaustive e2e (full tool surface, destructive gating, cleanup)
+        run: |
+          export LEANTIME_URL=http://localhost:8090
+          export LEANTIME_API_KEY="$(cat /tmp/key)"
+          export LEANTIME_E2E=local
+          cargo test --test e2e_local -- --nocapture --test-threads=1
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, smoke-windows, smoke-macos, msrv, local-e2e]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: leantmcp-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: leantmcp-linux-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: leantmcp-windows-x86_64.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: leantmcp-darwin-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: leantmcp-darwin-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package + checksum
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/leantmcp" "${{ matrix.artifact }}" 2>/dev/null \
+            || cp "target/${{ matrix.target }}/release/leantmcp.exe" "${{ matrix.artifact }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+          else
+            h=$(pwsh -Command "(Get-FileHash -Algorithm SHA256 '${{ matrix.artifact }}').Hash.ToLower()")
+            echo "$h  ${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+          fi
+          cat "${{ matrix.artifact }}.sha256"
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256

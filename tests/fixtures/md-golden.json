@@ -1,0 +1,367 @@
+[
+  {
+    "name": "empty",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "name": "single-para",
+    "input": "Simple text",
+    "expected": "<p>Simple text</p>"
+  },
+  {
+    "name": "two-paras",
+    "input": "First\n\nSecond",
+    "expected": "<p>First</p><p>Second</p>"
+  },
+  {
+    "name": "br",
+    "input": "line one\nline two",
+    "expected": "<p>line one<br />line two</p>"
+  },
+  {
+    "name": "h1",
+    "input": "# Title",
+    "expected": "<h1>Title</h1>"
+  },
+  {
+    "name": "h2",
+    "input": "## Section",
+    "expected": "<h2>Section</h2>"
+  },
+  {
+    "name": "h3",
+    "input": "### Sub",
+    "expected": "<h3>Sub</h3>"
+  },
+  {
+    "name": "h4",
+    "input": "#### Deep",
+    "expected": "<h4>Deep</h4>"
+  },
+  {
+    "name": "h5-clamp",
+    "input": "##### Five",
+    "expected": "<h4>Five</h4>"
+  },
+  {
+    "name": "h6-clamp",
+    "input": "###### Six",
+    "expected": "<h4>Six</h4>"
+  },
+  {
+    "name": "h7-para",
+    "input": "####### Seven",
+    "expected": "<p>####### Seven</p>"
+  },
+  {
+    "name": "hash-nospace",
+    "input": "#Not a heading",
+    "expected": "<p>#Not a heading</p>"
+  },
+  {
+    "name": "bold",
+    "input": "**important**",
+    "expected": "<p><strong>important</strong></p>"
+  },
+  {
+    "name": "bold-dunder",
+    "input": "__important__",
+    "expected": "<p><strong>important</strong></p>"
+  },
+  {
+    "name": "bold-mid",
+    "input": "text **bold** rest",
+    "expected": "<p>text <strong>bold</strong> rest</p>"
+  },
+  {
+    "name": "italic",
+    "input": "*emphasis*",
+    "expected": "<p><em>emphasis</em></p>"
+  },
+  {
+    "name": "italic-underscore",
+    "input": "text _ital_ rest",
+    "expected": "<p>text <em>ital</em> rest</p>"
+  },
+  {
+    "name": "italic-star-alone",
+    "input": "*star*",
+    "expected": "<p><em>star</em></p>"
+  },
+  {
+    "name": "strike",
+    "input": "~~obsolete~~",
+    "expected": "<p><s>obsolete</s></p>"
+  },
+  {
+    "name": "snake-case",
+    "input": "use some_var_name here",
+    "expected": "<p>use some_var_name here</p>"
+  },
+  {
+    "name": "dunder-word",
+    "input": "dunder __init__ method",
+    "expected": "<p>dunder <strong>init</strong> method</p>"
+  },
+  {
+    "name": "inline-code",
+    "input": "run `npm test` now",
+    "expected": "<p>run <code>npm test</code> now</p>"
+  },
+  {
+    "name": "code-protects",
+    "input": "``**not bold**`` x",
+    "expected": "<p><code>**not bold**</code> x</p>"
+  },
+  {
+    "name": "code-triple",
+    "input": "``` `tick` ```",
+    "expected": "<p>``<code> </code>tick<code> </code>``</p>"
+  },
+  {
+    "name": "code-unmatched",
+    "input": "a ` b",
+    "expected": "<p>a ` b</p>"
+  },
+  {
+    "name": "code-inside-bold",
+    "input": "**bold `code` bold**",
+    "expected": "<p><strong>bold <code>code</code> bold</strong></p>"
+  },
+  {
+    "name": "link",
+    "input": "[docs](https://example.com)",
+    "expected": "<p><a href=\"https://example.com\">docs</a></p>"
+  },
+  {
+    "name": "link-mailto",
+    "input": "mail [me](mailto:a@b.co)",
+    "expected": "<p>mail <a href=\"mailto:a@b.co\">me</a></p>"
+  },
+  {
+    "name": "link-bad-scheme",
+    "input": "[x](javascript:alert(1))",
+    "expected": "<p>[x](javascript:alert(1))</p>"
+  },
+  {
+    "name": "link-image",
+    "input": "![alt](https://example.com/i.png)",
+    "expected": "<p>![alt](https://example.com/i.png)</p>"
+  },
+  {
+    "name": "link-in-bold",
+    "input": "**see [docs](https://x.io)**",
+    "expected": "<p><strong>see <a href=\"https://x.io\">docs</a></strong></p>"
+  },
+  {
+    "name": "ul",
+    "input": "- one\n- two\n- three",
+    "expected": "<ul><li><p>one</p></li><li><p>two</p></li><li><p>three</p></li></ul>"
+  },
+  {
+    "name": "ul-star",
+    "input": "* one\n* two",
+    "expected": "<ul><li><p>one</p></li><li><p>two</p></li></ul>"
+  },
+  {
+    "name": "ol",
+    "input": "1. first\n2. second",
+    "expected": "<ol><li><p>first</p></li><li><p>second</p></li></ol>"
+  },
+  {
+    "name": "nested",
+    "input": "- top\n  - child\n- top2",
+    "expected": "<ul><li><p>top</p><ul><li><p>child</p></li></ul></li><li><p>top2</p></li></ul>"
+  },
+  {
+    "name": "nested-deep",
+    "input": "- a\n  - b\n    - c\n- d",
+    "expected": "<ul><li><p>a</p><ul><li><p>b</p><ul><li><p>c</p></li></ul></li></ul></li><li><p>d</p></li></ul>"
+  },
+  {
+    "name": "nested-ordered-in-ul",
+    "input": "- top\n  1. sub1\n  2. sub2\n- top2",
+    "expected": "<ul><li><p>top</p><ol><li><p>sub1</p></li><li><p>sub2</p></li></ol></li><li><p>top2</p></li></ul>"
+  },
+  {
+    "name": "task",
+    "input": "- [ ] todo\n- [x] done",
+    "expected": "<ul data-type=\"taskList\"><li data-type=\"taskItem\" data-checked=\"false\"><p>todo</p></li><li data-type=\"taskItem\" data-checked=\"true\"><p>done</p></li></ul>"
+  },
+  {
+    "name": "task-capital-x",
+    "input": "- [X] done too",
+    "expected": "<ul data-type=\"taskList\"><li data-type=\"taskItem\" data-checked=\"true\"><p>done too</p></li></ul>"
+  },
+  {
+    "name": "task-mixed-plain",
+    "input": "- [ ] a\n- plain b",
+    "expected": "<ul data-type=\"taskList\"><li data-type=\"taskItem\" data-checked=\"false\"><p>a</p></li><li data-type=\"taskItem\" data-checked=\"false\"><p>plain b</p></li></ul>"
+  },
+  {
+    "name": "lazy-continuation",
+    "input": "- item text\ncontinues here\n- second",
+    "expected": "<ul><li><p>item text continues here</p></li><li><p>second</p></li></ul>"
+  },
+  {
+    "name": "hr",
+    "input": "---",
+    "expected": "<hr>"
+  },
+  {
+    "name": "hr-four",
+    "input": "----",
+    "expected": "<hr>"
+  },
+  {
+    "name": "hr-stars",
+    "input": "***",
+    "expected": "<hr>"
+  },
+  {
+    "name": "hr-underscores",
+    "input": "___",
+    "expected": "<hr>"
+  },
+  {
+    "name": "hr-spaces",
+    "input": "   ---   ",
+    "expected": "<hr>"
+  },
+  {
+    "name": "list-vs-hr",
+    "input": "- item",
+    "expected": "<ul><li><p>item</p></li></ul>"
+  },
+  {
+    "name": "quote",
+    "input": "> quoted text",
+    "expected": "<blockquote><p>quoted text</p></blockquote>"
+  },
+  {
+    "name": "quote-two-paras",
+    "input": "> para one\n\n> para two",
+    "expected": "<blockquote><p>para one</p><p>para two</p></blockquote>"
+  },
+  {
+    "name": "quote-multiline",
+    "input": "> line a\n> line b",
+    "expected": "<blockquote><p>line a<br />line b</p></blockquote>"
+  },
+  {
+    "name": "quote-lazy",
+    "input": "> first\ncontinued quote",
+    "expected": "<blockquote><p>first</p></blockquote><p>continued quote</p>"
+  },
+  {
+    "name": "fence-lang",
+    "input": "```ts\nconst x = 1;\n```",
+    "expected": "<pre><code class=\"language-ts\">const x = 1;</code></pre>"
+  },
+  {
+    "name": "fence-plain",
+    "input": "```\ncode line\n```",
+    "expected": "<pre><code>code line</code></pre>"
+  },
+  {
+    "name": "fence-escapes",
+    "input": "```\n<script>alert(1)</script>\n```",
+    "expected": "<pre><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></pre>"
+  },
+  {
+    "name": "fence-unclosed",
+    "input": "```\nnever closed",
+    "expected": "<pre><code>never closed</code></pre>"
+  },
+  {
+    "name": "fence-close-trailing-space",
+    "input": "```\nx\n```   ",
+    "expected": "<pre><code>x</code></pre>"
+  },
+  {
+    "name": "raw-html-escaped",
+    "input": "<b>not bold</b> & <i>tag</i>",
+    "expected": "<p>&lt;b&gt;not bold&lt;/b&gt; &amp; &lt;i&gt;tag&lt;/i&gt;</p>"
+  },
+  {
+    "name": "crlf",
+    "input": "a\r\n\r\nb",
+    "expected": "<p>a</p><p>b</p>"
+  },
+  {
+    "name": "crlf-list",
+    "input": "- a\r\n- b",
+    "expected": "<ul><li><p>a</p></li><li><p>b</p></li></ul>"
+  },
+  {
+    "name": "unicode",
+    "input": "Émotion **gras** à çà",
+    "expected": "<p>Émotion <strong>gras</strong> à çà</p>"
+  },
+  {
+    "name": "mixed-doc",
+    "input": "## Objectif\n\nLivrer la **v1** avec `tests`.\n\n### Étapes\n\n1. setup\n2. build\n\n- [x] spec\n- [ ] merge\n\n> voir [docs](https://leantime.io)\n\n---\n\nFin.",
+    "expected": "<h2>Objectif</h2><p>Livrer la <strong>v1</strong> avec <code>tests</code>.</p><h3>Étapes</h3><ol><li><p>setup</p></li><li><p>build</p></li></ol><ul data-type=\"taskList\"><li data-type=\"taskItem\" data-checked=\"true\"><p>spec</p></li><li data-type=\"taskItem\" data-checked=\"false\"><p>merge</p></li></ul><blockquote><p>voir <a href=\"https://leantime.io\">docs</a></p></blockquote><hr><p>Fin.</p>"
+  },
+  {
+    "name": "emphasis-boundary-paren",
+    "input": "(**bold in parens**)",
+    "expected": "<p>(<strong>bold in parens</strong>)</p>"
+  },
+  {
+    "name": "emphasis-no-boundary",
+    "input": "a**b**c",
+    "expected": "<p>a**b**c</p>"
+  },
+  {
+    "name": "emphasis-close-punct",
+    "input": "**bold.** next",
+    "expected": "<p><strong>bold.</strong> next</p>"
+  },
+  {
+    "name": "emphasis-inner-spaces",
+    "input": "** not bold **",
+    "expected": "<p>** not bold **</p>"
+  },
+  {
+    "name": "nested-em-in-strong",
+    "input": "**bold *ital* bold**",
+    "expected": "<p><strong>bold <em>ital</em> bold</strong></p>"
+  },
+  {
+    "name": "underscore-in-words",
+    "input": "foo_bar_baz",
+    "expected": "<p>foo_bar_baz</p>"
+  },
+  {
+    "name": "multiple-paragraphs-list",
+    "input": "- item one\n\n- item two",
+    "expected": "<ul><li><p>item one</p></li></ul><ul><li><p>item two</p></li></ul>"
+  },
+  {
+    "name": "hard-case-code-first",
+    "input": "`code` **bold** *ital* ~~~ x",
+    "expected": "<p><code>code</code> <strong>bold</strong> <em>ital</em> ~~~ x</p>"
+  },
+  {
+    "name": "blockquote-nested-quote",
+    "input": "> a\n>\n> b",
+    "expected": "<blockquote><p>a</p><p>b</p></blockquote>"
+  },
+  {
+    "name": "nbsp-nested",
+    "input": "- a\n  - b",
+    "expected": "<ul><li><p>a</p><ul><li><p>b</p></li></ul></li></ul>"
+  },
+  {
+    "name": "nbsp-mixed-indent",
+    "input": "- top\n   child deep",
+    "expected": "<ul><li><p>top</p><p>child deep</p></li></ul>"
+  },
+  {
+    "name": "ideographic-space",
+    "input": "- x\n　　- y",
+    "expected": "<ul><li><p>x</p><ul><li><p>y</p></li></ul></li></ul>"
+  }
+]
