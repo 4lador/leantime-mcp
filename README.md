@@ -13,6 +13,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 **Documentation**: [Migrating from v1.x](#migrating-from-v1x) · [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
+## What's new in v2.3.0
+
+- **`dryRun: true`** on all mutation tools — validate without executing: same checks, `from → to` diffs on updates, per-item previews on bulk, zero API writes. See [Dry runs](#dry-runs).
+
 ## What's new in v2.2.0
 
 - **`leantime_project_context`** — the full picture of a project in one call: progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint, milestone progress, ticket summary and recently modified items. Replaces 5-6 agent round-trips with a single response capped under 4 KB, timestamped `generatedAt`. (v2.1.0 added `leantmcp restore` — see [Backup & recovery](#backup--recovery).)
@@ -215,6 +219,10 @@ The delete tools (`leantime_delete_ticket`, `leantime_delete_milestone`, `leanti
 
 Project hiding/deletion is intentionally not exposed.
 
+### Dry runs
+
+The mutation tools (`leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets`, `leantime_log_time`) accept `dryRun: true`: every validation runs (assignment, editorId existence, value constraints), update tools resolve `from → to` values against the current entity (with status labels and a warning when a field already holds the target value), bulk tools return per-item previews — and **no mutation is ever sent to Leantime**. A failed validation is returned as `valid: false` with the errors, not as a tool error. Natural chain: `leantime_backup_project` → `dryRun: true` → execute.
+
 ## Available MCP Tools
 
 **Projects & clients**
@@ -236,8 +244,8 @@ Project hiding/deletion is intentionally not exposed.
 |------|-------------|
 | `leantime_list_tickets` | List tickets with filters (status, milestone, sprint, user, type, search) |
 | `leantime_get_ticket` | Get ticket details |
-| `leantime_create_ticket` | Create a ticket (Markdown description, mandatory assignment, subtasks via dependingTicketId) |
-| `leantime_update_ticket` | Update a ticket (patch — other fields are never wiped) |
+| `leantime_create_ticket` | Create a ticket (Markdown description, mandatory assignment, subtasks via dependingTicketId; `dryRun` supported) |
+| `leantime_update_ticket` | Update a ticket (patch — other fields are never wiped; `dryRun` supported) |
 | `leantime_delete_ticket` | Delete a ticket (confirm-gated) |
 | `leantime_list_subtasks` | List a ticket's subtasks |
 | `leantime_my_tasks` | Open tickets assigned to a user (default: the API key owner) |
@@ -258,7 +266,7 @@ Project hiding/deletion is intentionally not exposed.
 
 | Tool | Description |
 |------|-------------|
-| `leantime_log_time` | Log hours on a ticket (`add` accumulates, `set` is idempotent) |
+| `leantime_log_time` | Log hours on a ticket (`add` accumulates, `set` is idempotent; `dryRun` supported) |
 | `leantime_get_ticket_time` | Total and per-day booked time for a ticket |
 | `leantime_list_timesheets` | List time entries between two dates |
 | `leantime_delete_timesheet_entry` | Delete a time entry (confirm-gated) |
@@ -269,8 +277,8 @@ Project hiding/deletion is intentionally not exposed.
 |------|-------------|
 | `leantime_list_milestones` | List milestones of a project |
 | `leantime_get_milestone` | Get milestone details |
-| `leantime_create_milestone` | Create a milestone (Markdown description, mandatory assignment) |
-| `leantime_update_milestone` | Update a milestone (patch) |
+| `leantime_create_milestone` | Create a milestone (Markdown description, mandatory assignment; `dryRun` supported) |
+| `leantime_update_milestone` | Update a milestone (patch; `dryRun` supported) |
 | `leantime_get_milestone_progress` | Completion % (effort × priority weighted, Leantime's formula) |
 | `leantime_delete_milestone` | Delete a milestone (confirm-gated; its tickets are kept) |
 
@@ -293,8 +301,8 @@ Project hiding/deletion is intentionally not exposed.
 
 | Tool | Description |
 |------|-------------|
-| `leantime_bulk_create_tickets` | Create up to 50 tickets — validated upfront, Markdown converted, per-item results |
-| `leantime_bulk_update_tickets` | Update up to 50 tickets via safe patch — per-item results |
+| `leantime_bulk_create_tickets` | Create up to 50 tickets — validated upfront, Markdown converted, per-item results (`dryRun` supported) |
+| `leantime_bulk_update_tickets` | Update up to 50 tickets via safe patch — per-item results (`dryRun` supported) |
 | `leantime_bulk_schedule_tickets` | Schedule up to 50 tickets (sprint, dates) via patch |
 
 **Backup & recovery**

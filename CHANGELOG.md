@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.0 — 2026-09-07
+
+### Added
+
+- **`dryRun: true` on mutation tools**: `leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets` and `leantime_log_time` accept `dryRun: true` — every validation runs (assignment, editorId existence, value constraints) and a verdict is returned instead of mutating. Updates resolve `from → to` values against the current entity (one read), with status labels and a warning when a field already holds the target value; bulk tools return per-item previews (payload builders extracted so the dry-run and write paths can never drift); `log_time` dry-runs 100% locally and accumulates all errors. A failed validation is `valid: false` with the errors — not an MCP error. Delete tools are unchanged: their `confirm` gate already is a dry-run.
+
 ## v2.2.0 — 2026-09-07
 
 ### Added
