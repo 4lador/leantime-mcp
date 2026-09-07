@@ -144,7 +144,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool_with_annotations("leantime_update_sprint", "Update a sprint (name and/or dates)",
             vec![rs("sprintId", "The sprint ID"), os("name", "New sprint name"), os("startDate", "New start date, YYYY-MM-DD"), os("endDate", "New end date, YYYY-MM-DD")],
             vec!["sprintId"], Box::new(h_update_sprint), ToolAnnotations::write()),
-        tool_with_annotations("leantime_get_current_sprint", "Get the sprint currently in progress for a project (falls back to the next upcoming one). Computed from sprint dates — Leantime's session-based currentSprint is unavailable to API keys.",
-            vec![rs("projectId", "The project ID")], vec!["projectId"], Box::new(h_get_current_sprint), ToolAnnotations::readonly_volatile()),
+        tool("leantime_get_current_sprint", "Get the sprint currently in progress for a project (falls back to the next upcoming one). Computed from sprint dates — Leantime's session-based currentSprint is unavailable to API keys.",
+            vec![rs("projectId", "The project ID")], vec!["projectId"], Box::new(h_get_current_sprint)),
     ]
 }

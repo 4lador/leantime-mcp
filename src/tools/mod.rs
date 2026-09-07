@@ -1,4 +1,4 @@
-//! The 41 MCP tools, split by domain. [`tools::create_registry`] returns them
+//! The 42 MCP tools, split by domain. [`tools::create_registry`] returns them
 //! all; handlers close over a shared [`tools::ClientRef`].
 
 mod backup;
@@ -6,6 +6,7 @@ mod bulk;
 mod comments;
 mod key_rotate;
 mod milestones;
+mod project_context;
 mod projects;
 mod shared;
 mod sprints;
@@ -112,17 +113,6 @@ impl ToolAnnotations {
             open_world: true,
         }
     }
-
-    /// Read-only but time-dependent (e.g. get_current_sprint — the result
-    /// changes as the calendar advances, so not idempotent).
-    pub fn readonly_volatile() -> Self {
-        Self {
-            read_only: true,
-            destructive: false,
-            idempotent: false,
-            open_world: true,
-        }
-    }
 }
 
 /// Wrap an error message as an MCP tool error result.
@@ -156,10 +146,10 @@ fn rpc(method: &'static str, map: fn(&Value) -> Value) -> Handler {
     )
 }
 
-/// All 41 tools, in stable registry order (projects, tickets, milestones,
-/// sprints, users, comments, timesheets, bulk).
+/// All 42 tools, in stable registry order (projects, tickets, milestones,
+/// sprints, users, comments, timesheets, bulk, backup, project_context).
 pub fn create_registry() -> Vec<Tool> {
-    let mut tools = Vec::with_capacity(41);
+    let mut tools = Vec::with_capacity(42);
     tools.extend(projects::tools());
     tools.extend(tickets::tools());
     tools.extend(milestones::tools());
@@ -169,5 +159,6 @@ pub fn create_registry() -> Vec<Tool> {
     tools.extend(timesheets::tools());
     tools.extend(bulk::tools());
     tools.extend(backup::tools());
+    tools.extend(project_context::tools());
     tools
 }

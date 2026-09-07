@@ -705,8 +705,9 @@ fn format_size(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 
 /// Resolve a user-provided target (tool name or group name) into tool names.
-/// Groups: all (41), destructive (delete_* + bulk_*), readonly (list/get/find/
-/// my_tasks/backup), write (create/update/add/log — everything that mutates).
+/// Groups: all (42), destructive (delete_* + bulk_*), readonly (list/get/find/
+/// my_tasks/backup/project_context), write (create/update/add/log —
+/// everything that mutates).
 fn resolve_target(target: &str, registry: &[tools::Tool]) -> Result<Vec<String>, String> {
     let is_group = |t: &tools::Tool, group: &str| -> bool {
         match group {
@@ -719,6 +720,7 @@ fn resolve_target(target: &str, registry: &[tools::Tool]) -> Result<Vec<String>,
                     || t.name.starts_with("leantime_find")
                     || t.name == "leantime_my_tasks"
                     || t.name == "leantime_backup_project"
+                    || t.name == "leantime_project_context"
             }
             "write" => {
                 t.name.starts_with("leantime_create")

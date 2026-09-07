@@ -166,8 +166,14 @@ fn h_get_milestone_progress(
         let default_priority = 3.0;
         let mut total: f64 = 0.0;
         let mut done: f64 = 0.0;
+        // Missing, null, "" — or a literal 0 ("not estimated") — all fall
+        // back to the defaults. Otherwise a milestone of unestimated tickets
+        // would weigh 0 and report 0% forever.
         let empty_or_missing = |v: Option<&Value>, s: &str| {
-            v.is_none() || matches!(v, Some(Value::Null)) || v.and_then(|x| x.as_str()) == Some(s)
+            v.is_none()
+                || matches!(v, Some(Value::Null))
+                || v.and_then(|x| x.as_str()) == Some(s)
+                || num_coerce(v, f64::NAN) == 0.0
         };
         if let Some(arr) = tickets.as_array() {
             for t in arr {
