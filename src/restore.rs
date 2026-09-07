@@ -132,6 +132,7 @@ pub fn validate_backup(path: &std::path::Path) -> Result<Value, String> {
 /// Sort tickets so that parents (no dependingTicketId) come first,
 /// then children ordered by their parent's creation order.
 /// Orphan subtasks (parent not in backup) become top-level with a warning.
+/// Handles both string and integer dependingTicketId values.
 pub fn topological_sort(tickets: &[Value]) -> (Vec<Value>, Vec<String>) {
     let mut warnings = Vec::new();
     let id_str = |v: &Value| -> String {
@@ -143,17 +144,14 @@ pub fn topological_sort(tickets: &[Value]) -> (Vec<Value>, Vec<String>) {
 
     let all_ids: Vec<String> = tickets.iter().map(|t| id_str(&t["id"])).collect();
 
-    // Phase 1: parents (no dependingTicketId)
+    // Phase 1: parents (no dependingTicketId or dependingTicketId == 0)
     let mut sorted: Vec<Value> = Vec::new();
     let mut remaining: Vec<Value> = Vec::new();
 
     for t in tickets {
-        let dep = t
-            .get("dependingTicketId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let dep_clean = dep.trim();
-        if dep_clean.is_empty() || dep_clean == "0" {
+        let dep = t.get("dependingTicketId").map(&id_str).unwrap_or_default();
+        let dep_clean = dep.trim().to_string();
+        if dep_clean.is_empty() || dep_clean == "0" || dep_clean == "null" {
             sorted.push(t.clone());
         } else {
             remaining.push(t.clone());
@@ -204,8 +202,262 @@ pub fn topological_sort(tickets: &[Value]) -> (Vec<Value>, Vec<String>) {
 }
 
 // ---------------------------------------------------------------------------
-// Dry-run (plan without executing)
+// Status management (interactive resolution)
 // ---------------------------------------------------------------------------
+
+/// A unique status from the backup: (status_id, label, status_type, ticket_count)
+pub type BackupStatus = (i64, String, String, usize);
+
+/// Extract unique statuses from backup tickets (scans the enriched data).
+/// Handles missing/empty/placeholder labels ("?", "") by falling back to
+/// statusType for matching, then to the status ID as last resort.
+pub fn extract_backup_statuses(backup: &Value) -> Vec<BackupStatus> {
+    let tickets = backup["tickets"].as_array().cloned().unwrap_or_default();
+    let mut map: std::collections::HashMap<i64, BackupStatus> = std::collections::HashMap::new();
+
+    for t in &tickets {
+        let status_id = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
+        let stype = t
+            .get("statusType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("NEW")
+            .to_string();
+
+        // Normalize the label: "?", "", null, or missing → use statusType
+        // as a semantic label for matching (better than "Unknown")
+        let raw_label = t
+            .get("statusLabel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let label = if raw_label.is_empty() || raw_label == "?" || raw_label == "null" {
+            // No meaningful label — use statusType as the matching key
+            stype.clone()
+        } else {
+            raw_label
+        };
+
+        let entry = map.entry(status_id).or_insert((status_id, label, stype, 0));
+        entry.3 += 1;
+    }
+
+    let mut statuses: Vec<BackupStatus> = map.into_values().collect();
+    statuses.sort_by(|a, b| b.3.cmp(&a.3)); // Most used first
+    statuses
+}
+
+/// Detect which backup statuses have no match in the target project.
+/// Matching cascade: label (case-insensitive) → statusType → gap.
+/// Only true gaps (neither label nor type matches) trigger interactive resolution.
+pub fn detect_status_gaps(
+    backup_statuses: &[BackupStatus],
+    project_statuses: &Value,
+) -> Vec<BackupStatus> {
+    let normalize = |s: &str| s.trim().to_lowercase();
+
+    backup_statuses
+        .iter()
+        .filter(|(_, label, stype, _)| {
+            let label_match = project_statuses
+                .as_object()
+                .map(|obj| {
+                    obj.values().any(|v| {
+                        v.get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|n| normalize(n) == normalize(label))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
+            let type_match = project_statuses
+                .as_object()
+                .map(|obj| {
+                    obj.values().any(|v| {
+                        v.get("statusType")
+                            .and_then(|t| t.as_str())
+                            .map(|t| t.eq_ignore_ascii_case(stype))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
+            // It's a gap only if NEITHER label NOR statusType matches
+            !label_match && !type_match
+        })
+        .cloned()
+        .collect()
+}
+
+/// Build the status mapping: backup label → new project status ID.
+/// Matching cascade:
+/// 1. Exact label match (case-insensitive)
+/// 2. statusType match (e.g., backup DONE → any project status with type DONE)
+/// 3. No match → gap (needs interactive resolution)
+pub fn build_status_mapping(
+    backup_statuses: &[BackupStatus],
+    project_statuses: &Value,
+) -> std::collections::HashMap<String, i64> {
+    let normalize = |s: &str| s.trim().to_lowercase();
+    let mut mapping = std::collections::HashMap::new();
+
+    for (_, label, stype, _) in backup_statuses {
+        // Pass 1: exact label match
+        if let Some(obj) = project_statuses.as_object() {
+            for (id_str, info) in obj {
+                if let (Ok(id), Some(name)) = (
+                    id_str.parse::<i64>(),
+                    info.get("name").and_then(|n| n.as_str()),
+                ) {
+                    if normalize(name) == normalize(label) {
+                        mapping.insert(label.clone(), id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Pass 2: if no label match, try statusType
+        if !mapping.contains_key(label.as_str()) {
+            if let Some(obj) = project_statuses.as_object() {
+                for (id_str, info) in obj {
+                    if let (Ok(id), Some(ptype)) = (
+                        id_str.parse::<i64>(),
+                        info.get("statusType").and_then(|t| t.as_str()),
+                    ) {
+                        if ptype.eq_ignore_ascii_case(stype) {
+                            mapping.insert(label.clone(), id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    mapping
+}
+
+/// Interactive CLI prompt to resolve missing statuses.
+/// Asks the user to create the statuses in Leantime UI with the same names,
+/// then re-fetches and matches by label.
+pub async fn resolve_status_gaps_interactive(
+    client: &mut LeantimeClient,
+    project_id: &str,
+    gaps: &[BackupStatus],
+    backup_statuses: &[BackupStatus],
+) -> Result<std::collections::HashMap<String, i64>, String> {
+    use std::io::Write as _;
+
+    if gaps.is_empty() {
+        return Ok(build_status_mapping(backup_statuses, &json!({})));
+    }
+
+    println!("\n⚠ Status mapping needed:");
+    for (_, label, stype, count) in gaps {
+        println!("  \"{}\" (type: {}, {} tickets) — not in this project", label, stype, count);
+    }
+    println!("\nThe Leantime API cannot create custom statuses.");
+    println!("Open Leantime → project settings → Statuses");
+    println!("and create these with the same names:\n");
+    for (_, label, _, _) in gaps {
+        println!("  • {}", label);
+    }
+
+    let mut skipped: Vec<String> = Vec::new();
+
+    loop {
+        print!("\nPress Enter when done (or 's' to skip all, 'c' to cancel): ");
+        let _ = std::io::stdout().flush();
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("stdin error: {}", e))?;
+        let input = input.trim();
+
+        if input.eq_ignore_ascii_case("c") {
+            return Err("Cancelled by user.".into());
+        }
+        if input.eq_ignore_ascii_case("s") {
+            for (_, label, _, _) in gaps {
+                skipped.push(label.clone());
+            }
+            break;
+        }
+
+        // Re-fetch project statuses
+        let project_statuses = client
+            .call("tickets.getStatusLabels", json!({"projectId": project_id}))
+            .await
+            .map_err(|e| format!("Could not fetch statuses: {}", e))?;
+
+        // Check which gaps are now resolved
+        let remaining: Vec<&BackupStatus> = gaps
+            .iter()
+            .filter(|(_, label, _, _)| {
+                !project_statuses
+                    .as_object()
+                    .map(|obj| {
+                        obj.values().any(|v| {
+                            v.get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|n| n.trim().eq_ignore_ascii_case(label.trim()))
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if remaining.is_empty() {
+            println!("  ✓ All statuses found!");
+            break;
+        }
+
+        println!("\nStill missing:");
+        for (_, label, _, count) in remaining {
+            println!("  ⚠ \"{}\" ({} tickets)", label, count);
+        }
+        println!("\nCreate them and press Enter again, or 's' to skip remaining:");
+    }
+
+    // Build final mapping
+    let project_statuses = client
+        .call("tickets.getStatusLabels", json!({"projectId": project_id}))
+        .await
+        .map_err(|e| format!("Could not fetch statuses: {}", e))?;
+
+    let mut mapping = build_status_mapping(backup_statuses, &project_statuses);
+
+    // For skipped statuses, map to the project's NEW-type status (not hardcoded 0)
+    if !skipped.is_empty() {
+        // Find the first status with statusType "NEW" (or fallback to 0)
+        let new_status_id = project_statuses
+            .as_object()
+            .and_then(|obj| {
+                obj.iter()
+                    .filter(|(_, v)| {
+                        v.get("statusType")
+                            .and_then(|t| t.as_str())
+                            .is_some_and(|t| t.eq_ignore_ascii_case("NEW"))
+                    })
+                    .filter_map(|(k, _)| k.parse::<i64>().ok())
+                    .min()
+            })
+            .unwrap_or(0);
+
+        for label in &skipped {
+            mapping.insert(label.clone(), new_status_id);
+            println!(
+                "  ⚠ \"{}\" will be restored as status {} (user skipped)",
+                label, new_status_id
+            );
+        }
+    }
+
+    Ok(mapping)
+}
 
 /// Analyze the backup and produce a restore plan. Read-only, no mutations.
 pub fn plan_restore(backup: &Value) -> RestorePlan {
@@ -220,14 +472,18 @@ pub fn plan_restore(backup: &Value) -> RestorePlan {
     let tickets = backup["tickets"].as_array().cloned().unwrap_or_default();
     let comments = backup["comments"].as_array().cloned().unwrap_or_default();
 
+    let id_of = |v: &Value| -> String {
+        match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }
+    };
+
     let subtask_count = tickets
         .iter()
         .filter(|t| {
-            let dep = t
-                .get("dependingTicketId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            !dep.trim().is_empty() && dep.trim() != "0"
+            let dep = t.get("dependingTicketId").map(&id_of).unwrap_or_default();
+            !dep.trim().is_empty() && dep.trim() != "0" && dep.trim() != "null"
         })
         .count();
 
@@ -275,6 +531,8 @@ pub async fn execute_restore(
 
     let mut failures: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut status_mapping: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
 
     // Maps: old_id → new_id
     let mut ms_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -304,6 +562,54 @@ pub async fn execute_restore(
         .and_then(|a| a.first())
         .map(id_str)
         .unwrap_or_else(|| project_result.to_string());
+
+    // 1b. Status analysis and interactive resolution
+    let backup_statuses = extract_backup_statuses(backup);
+    let project_statuses = client
+        .call(
+            "tickets.getStatusLabels",
+            json!({"projectId": &new_project_id}),
+        )
+        .await
+        .map_err(|e| format!("Could not fetch new project statuses: {}", e))?;
+
+    let gaps = detect_status_gaps(&backup_statuses, &project_statuses);
+    if !gaps.is_empty() {
+        let mapping = resolve_status_gaps_interactive(
+            client,
+            &new_project_id,
+            &gaps,
+            &backup_statuses,
+        )
+        .await?;
+
+        // Display the final mapping
+        println!("\nFinal status mapping:");
+        for (old_id, label, _, count) in &backup_statuses {
+            if let Some(new_id) = mapping.get(label) {
+                // Look up the new label for display
+                let new_label = project_statuses
+                    .as_object()
+                    .and_then(|obj| {
+                        obj.get(&new_id.to_string())
+                            .and_then(|v| v.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| format!("status {}", new_id));
+
+                if *new_id != *old_id {
+                    println!("  ✓ {} → {} = {} ({} tickets)", label, new_id, new_label, count);
+                } else {
+                    println!("  ✓ {} ({} tickets)", label, count);
+                }
+            }
+        }
+        // Store the mapping for use during ticket creation
+        status_mapping = mapping;
+    } else {
+        println!("  ✓ All statuses map cleanly");
+    }
 
     // 2. Create milestones
     let mut ms_created = 0;
@@ -380,8 +686,34 @@ pub async fn execute_restore(
             "projectId": json!(&new_project_id),
         });
 
-        // Restore status if it's a valid number
-        if let Some(status) = t.get("status").filter(|s| s.is_number()) {
+        // Apply status mapping (label-based, resolved interactively if needed).
+        // Normalize the backup label the SAME way as extract_backup_statuses
+        // so the mapping keys match.
+        let backup_stype = t
+            .get("statusType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("NEW")
+            .to_string();
+        let raw_status_label = t
+            .get("statusLabel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let backup_status_label = if raw_status_label.is_empty()
+            || raw_status_label == "?"
+            || raw_status_label == "null"
+        {
+            backup_stype.clone()
+        } else {
+            raw_status_label
+        };
+
+        if let Some(new_status) = status_mapping.get(&backup_status_label) {
+            values["status"] = json!(new_status);
+        } else if let Some(status) = t.get("status").filter(|s| s.is_number()) {
+            // No mapping found — use original ID (should be rare after
+            // the statusType fallback in build_status_mapping)
             values["status"] = status.clone();
         }
 
@@ -398,33 +730,33 @@ pub async fn execute_restore(
             }
         }
 
-        // Remap milestone reference
-        if let Some(old_ms) = t.get("milestoneid").and_then(|v| v.as_str()) {
-            if let Some(new_ms) = ms_map.get(old_ms) {
+        // Remap milestone reference (handles both string and integer IDs)
+        let old_ms = t.get("milestoneid").map(&id_str).unwrap_or_default();
+        if !old_ms.is_empty() && old_ms != "0" {
+            if let Some(new_ms) = ms_map.get(&old_ms) {
                 values["milestoneid"] = json!(new_ms);
             }
         }
         // Also check "milestoneId" (camelCase from some API versions)
-        if let Some(old_ms) = t.get("milestoneId").and_then(|v| v.as_str()) {
-            if let Some(new_ms) = ms_map.get(old_ms) {
+        let old_ms2 = t.get("milestoneId").map(&id_str).unwrap_or_default();
+        if !old_ms2.is_empty() && old_ms2 != "0" {
+            if let Some(new_ms) = ms_map.get(&old_ms2) {
                 values["milestoneid"] = json!(new_ms);
             }
         }
 
-        // Remap sprint reference
-        if let Some(old_sp) = t.get("sprint").and_then(|v| v.as_str()) {
-            if let Some(new_sp) = sprint_map.get(old_sp) {
+        // Remap sprint reference (handles both string and integer IDs)
+        let old_sp = t.get("sprint").map(&id_str).unwrap_or_default();
+        if !old_sp.is_empty() && old_sp != "0" {
+            if let Some(new_sp) = sprint_map.get(&old_sp) {
                 values["sprint"] = json!(new_sp);
             }
         }
 
-        // Remap parent ticket (dependingTicketId)
-        let old_dep = t
-            .get("dependingTicketId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        // Remap parent ticket (dependingTicketId, handles both types)
+        let old_dep = t.get("dependingTicketId").map(&id_str).unwrap_or_default();
         if !old_dep.is_empty() && old_dep != "0" {
-            if let Some(new_dep) = ticket_map.get(old_dep) {
+            if let Some(new_dep) = ticket_map.get(&old_dep) {
                 values["dependingTicketId"] = json!(new_dep);
             }
             // If parent not in map (orphan), we already warned — create top-level
@@ -437,10 +769,25 @@ pub async fn execute_restore(
             }
         }
 
-        // Restore type
+        // SKIP milestones in the tickets section — already created from the
+        // milestones section. Map their old ticket-id to the new milestone-id
+        // so subtask references resolve correctly.
+        if t.get("type").and_then(|v| v.as_str()) == Some("milestone") {
+            let old_tid = id_str(&t["id"]);
+            if let Some(new_ms_id) = ms_map.get(&old_tid) {
+                ticket_map.insert(old_tid, new_ms_id.clone());
+                continue; // NE PAS créer — déjà fait depuis la section milestones
+            }
+            // Milestone not in ms_map (inconsistent backup) — create as ticket + warning
+            warnings.push(format!(
+                "milestone ticket {} not found in milestones section — creating as regular ticket",
+                old_tid
+            ));
+        }
+
+        // Restore type for non-milestone tickets
         if let Some(ttype) = t.get("type").and_then(|v| v.as_str()) {
             if ttype != "milestone" {
-                // Don't duplicate milestones (they're in the milestone section)
                 values["type"] = json!(ttype);
             }
         }
