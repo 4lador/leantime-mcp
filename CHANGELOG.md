@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.2 — 2026-09-07
+
+### Fixed
+
+- **Silent truncation at 500 items on completeness fetches**: backups of projects larger than 500 tickets were silently truncated by the API's per-call limit — and the restore verification would compare 500 expected vs 500 found and report success while tickets had never been captured. All completeness paths (backup, restore verification, milestone list and progress, project_context) now request 10 000 items per call, overridable via `LEANTIME_MCP_FETCH_LIMIT` (no numeric clamp — admin-controlled like `LEANTIME_URL`; the 64 MB streaming cap is the backstop). A fetch returning exactly the limit produces an explicit warning in the backup result (CLI + MCP `warnings` field) and at restore verification. `leantime_list_tickets` stays capped at 500 — its result goes into the LLM context, the cap protects the context window — and now returns `{tickets, note}` with a "refine filters" note when the cap is hit instead of a silently-truncated array.
+
 ## v2.3.1 — 2026-09-07
 
 ### Changed

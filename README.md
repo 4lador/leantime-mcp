@@ -363,6 +363,8 @@ leantmcp restore backup.json --confirm  # execute the restore
 
 Backups land in `~/.config/leantime/backups/<project-name>-<timestamp>.json` (mode 0600). Fast mode captures milestones, tickets and sprints in 3 API calls. `--full` adds per-ticket comments at 1 call per ticket — on a rate-limited instance (~10 req/min), expect roughly 1 minute per 10 tickets.
 
+**Large projects**: completeness fetches (backup, restore verification) request 10 000 items per API call by default — override with `LEANTIME_MCP_FETCH_LIMIT` for instances with even bigger projects. If a fetch returns exactly the limit, the backup reports a `warnings` entry: items beyond the limit were NOT captured (the API offers no offset pagination) — raise the limit and re-run. `leantime_list_tickets` is separately capped at 500 results to protect the agent's context window, and says so in a note when the cap is hit.
+
 The MCP tool `leantime_backup_project` does the same fast backup and returns only a summary (path + counts), so agents can trigger it cheaply — e.g. before bulk modifications.
 
 **Restore** rebuilds a backup into a **NEW project** (never merges with existing data — zero risk of overwriting). Tickets are created in topological order (parents before subtasks), with all cross-references remapped (milestone, sprint, parent ticket). If the backup contains custom statuses that don't exist in the new project, the restore prompts interactively: it asks you to create the statuses in Leantime's UI (showing the exact project name and ID), then resolves the mapping by re-fetching. The dry-run (default without `--confirm`) shows exactly what would be created and any warnings — no API writes.
