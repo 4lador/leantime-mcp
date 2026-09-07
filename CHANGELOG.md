@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.3 — 2026-09-08
+
+### Fixed
+
+- **`leantime_list_tickets` status label filter returned the wrong tickets**: the label was passed raw to the API, which `intval()`s it — `"New"` became `0` and silently filtered on status ID 0 (on the test project, asking for "New" returned every Done ticket). Labels are now resolved to their IDs server-side against the project's cached status map (case-insensitive), comma-separated lists resolve token by token, and an unknown label returns an actionable error listing the project's valid statuses with their IDs. The server's magic values `done` / `not_done` (resolved by statusType) pass through untouched, as do numeric IDs.
+
 ## v2.3.2 — 2026-09-07
 
 ### Fixed

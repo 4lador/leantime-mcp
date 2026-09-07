@@ -2158,3 +2158,195 @@ async fn list_tickets_notes_truncation_at_cap() {
     assert!(note.contains("showing first 500"), "{}", note);
     m.assert();
 }
+
+// ---------------------------------------------------------------- status filter resolution
+
+#[tokio::test]
+async fn list_tickets_resolves_status_label_to_id() {
+    let mut server = Server::new_async().await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({
+            "3": {"name": "New", "statusType": "NEW"},
+            "4": {"name": "In Progress", "statusType": "IN_PROGRESS"},
+            "0": {"name": "Done", "statusType": "DONE"}
+        })))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "15", "status": "3"}, "limit": 500
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "15", "status": "New"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    m.assert(); // the wire carried the resolved ID, not the label
+}
+
+#[tokio::test]
+async fn list_tickets_status_resolution_is_case_insensitive() {
+    let mut server = Server::new_async().await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({
+            "3": {"name": "New", "statusType": "NEW"},
+            "4": {"name": "In Progress", "statusType": "IN_PROGRESS"}
+        })))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {"status": "4"}, "limit": 500}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "15", "status": "in progress"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, _) = parse(&r);
+    assert!(!is_err);
+    m.assert();
+}
+
+#[tokio::test]
+async fn list_tickets_resolves_csv_of_labels() {
+    let mut server = Server::new_async().await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({
+            "3": {"name": "New", "statusType": "NEW"},
+            "0": {"name": "Done", "statusType": "DONE"}
+        })))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {"status": "3,0"}, "limit": 500}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "15", "status": "New, Done"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, _) = parse(&r);
+    assert!(!is_err);
+    m.assert();
+}
+
+#[tokio::test]
+async fn list_tickets_magic_done_passes_through() {
+    // "done"/"not_done" are resolved server-side by statusType — they must
+    // reach the wire untouched (and must NOT require a status-map call).
+    let mut server = Server::new_async().await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"0": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {"status": "done"}, "limit": 500}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "15", "status": "done"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, _) = parse(&r);
+    assert!(!is_err);
+    m.assert();
+}
+
+#[tokio::test]
+async fn list_tickets_unknown_status_label_errors_without_fetching() {
+    let mut server = Server::new_async().await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({
+            "3": {"name": "New", "statusType": "NEW"},
+            "0": {"name": "Done", "statusType": "DONE"}
+        })))
+        .create_async()
+        .await;
+    // No tickets.getAll mock: any fetch attempt would 501 and change the
+    // error message — the resolution error is asserted instead.
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "15", "status": "Frozen"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, text) = parse(&r);
+    assert!(is_err);
+    let msg = text.as_str().unwrap_or_default();
+    assert!(msg.contains("Unknown status \"Frozen\""), "{}", msg);
+    assert!(msg.contains("Valid statuses:"), "{}", msg);
+    assert!(msg.contains("3 (New)"), "{}", msg);
+    assert!(msg.contains("0 (Done)"), "{}", msg);
+    assert!(msg.contains("\"done\" and \"not_done\""), "{}", msg);
+}

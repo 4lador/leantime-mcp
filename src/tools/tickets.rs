@@ -13,6 +13,75 @@ use super::{error_result, ok_result, rpc, ClientRef, Tool, ToolAnnotations};
 /// the LLM context, so the limit exists to protect the context window.
 const LIST_TICKETS_LIMIT: usize = 500;
 
+/// True for status tokens that need the status map to resolve (labels).
+/// Numeric IDs and the server's magic "done"/"not_done" pass through.
+fn status_token_needs_map(t: &str) -> bool {
+    let t = t.trim();
+    !t.is_empty() && !t.bytes().all(|b| b.is_ascii_digit()) && t != "done" && t != "not_done"
+}
+
+/// True when the `status` argument contains at least one label token.
+fn status_needs_map(arg: &Value) -> bool {
+    match arg {
+        Value::String(s) => s.split(',').any(status_token_needs_map),
+        _ => false,
+    }
+}
+
+/// Resolve the user-provided `status` argument into the wire value the API
+/// expects: status IDs. The API `intval()`s whatever it receives, so an
+/// unresolved label would silently filter on status 0 (the wrong result
+/// set). Numeric tokens, "done" and "not_done" (server magic values,
+/// resolved by statusType) pass through; labels resolve case-insensitively
+/// against the project's status map; comma-separated lists resolve token
+/// by token.
+fn resolve_status_filter(arg: &Value, sm: &Value, pid: &str) -> Result<Value, String> {
+    let s = match arg {
+        Value::String(s) => s.clone(),
+        other => return Ok(other.clone()),
+    };
+    let mut resolved: Vec<String> = Vec::new();
+    for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        if !status_token_needs_map(tok) {
+            resolved.push(tok.to_string());
+            continue;
+        }
+        let lower = tok.to_lowercase();
+        let hit = sm.as_object().and_then(|obj| {
+            obj.iter().find(|(_, info)| {
+                info.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|n| n.to_lowercase() == lower)
+                    .unwrap_or(false)
+            })
+        });
+        match hit {
+            Some((id, _)) => resolved.push(id.clone()),
+            None => {
+                let valid: Vec<String> = sm
+                    .as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(id, info)| {
+                                info.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|n| format!("{} ({})", id, n))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Unknown status \"{}\" in project {}. Valid statuses: {} (by ID). The values \"done\" and \"not_done\" are also accepted.",
+                    tok,
+                    pid,
+                    valid.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(json!(resolved.join(",")))
+}
+
 fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
@@ -21,7 +90,23 @@ fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value>
         // params are silently ignored and would return every ticket.
         let mut sc = json!({ "currentProject": pid });
         if let Some(v) = a.get("status") {
-            sc["status"] = v.clone();
+            if status_needs_map(v) {
+                let sm = match c.get_status_map(pid).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return error_result(&format!(
+                            "Could not load status labels to resolve the status filter: {}",
+                            e
+                        ))
+                    }
+                };
+                match resolve_status_filter(v, &sm, pid) {
+                    Ok(r) => sc["status"] = r,
+                    Err(e) => return error_result(&e),
+                }
+            } else {
+                sc["status"] = v.clone();
+            }
         }
         if let Some(v) = a.get("milestoneId") {
             sc["milestone"] = v.clone();
@@ -349,7 +434,7 @@ pub(super) fn tools() -> Vec<Tool> {
     let assignment = ASSIGNMENT_HINT;
     vec![
         tool("leantime_list_tickets", "List tickets/tasks for a project with optional filters",
-            vec![rs("projectId", "The project ID to list tickets for"), os("status", "Filter by status name or ID"), os("milestoneId", "Filter by milestone ID"), os("sprintId", "Filter by sprint ID"), os("userId", "Filter by assigned user ID"), os("type", "Filter by ticket type (task, story, bug, etc.)"), os("search", "Search term for ticket headline/description")],
+            vec![rs("projectId", "The project ID to list tickets for"), os("status", "Filter by status: status label (resolved to its ID), status ID, comma-separated list, or 'done'/'not_done'"), os("milestoneId", "Filter by milestone ID"), os("sprintId", "Filter by sprint ID"), os("userId", "Filter by assigned user ID"), os("type", "Filter by ticket type (task, story, bug, etc.)"), os("search", "Search term for ticket headline/description")],
             vec!["projectId"], Box::new(h_list_tickets)),
         tool("leantime_get_ticket", "Get details of a specific ticket/task",
             vec![rs("projectId", "The project ID"), rs("ticketId", "The ticket ID")], vec!["projectId", "ticketId"], Box::new(h_get_ticket)),
