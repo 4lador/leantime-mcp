@@ -13,6 +13,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 **Documentation**: [Migrating from v1.x](#migrating-from-v1x) · [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
+## What's new in v2.3.1
+
+- **Dry-run by default (agent guidance, three-tier policy)**: mutation tool descriptions now instruct agents to execute directly when values are explicit or resolve unambiguously, to dry-run and confirm when they interpreted or chose values themselves, and to always dry-run bulk batches. Agents validate their own inferences without turning every trivial change into a permission loop.
+
 ## What's new in v2.3.0
 
 - **`dryRun: true`** on all mutation tools — validate without executing: same checks, `from → to` diffs on updates, per-item previews on bulk, zero API writes. See [Dry runs](#dry-runs).
@@ -56,6 +60,8 @@ Why the rewrite? The v1.x binary embedded the Deno/V8 runtime:
 
 - Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments, time tracking and **bulk operations** (42 tools)
 - **`leantime_project_context`**: a composite first-call tool that hydrates full project context (progress, health, sprint, milestones, activity) in one round-trip — agents start reasoning instead of paging through lists
+- **Dry runs**: every mutation tool accepts `dryRun: true` — same validations, `from → to` diffs on updates, per-item previews on bulk, zero API writes. Agents are instructed to dry-run first on conversational-intent updates and inferred creates, and always on bulk batches
+- **Backup & recovery**: `leantmcp backup [--full]` snapshots a project (plus `leantmcp restore` to rebuild it into a new project), and `leantime_backup_project` lets agents trigger a cheap backup before bulk modifications
 - **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — still zero secrets
 - **Automatic 429 retry**: adaptive backoff that discovers the instance's rate limit from response headers — agents never handle rate limiting
 - Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor
@@ -222,6 +228,12 @@ Project hiding/deletion is intentionally not exposed.
 ### Dry runs
 
 The mutation tools (`leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets`, `leantime_log_time`) accept `dryRun: true`: every validation runs (assignment, editorId existence, value constraints), update tools resolve `from → to` values against the current entity (with status labels and a warning when a field already holds the target value), bulk tools return per-item previews — and **no mutation is ever sent to Leantime**. A failed validation is returned as `valid: false` with the errors, not as a tool error. Natural chain: `leantime_backup_project` → `dryRun: true` → execute.
+
+**Agent guidance is built into the tool descriptions** (since v2.3.1), on a three-tier policy:
+
+1. **Direct execution** when every value was explicitly given or resolves unambiguously — "passe le ticket #535 en Terminé" maps to one status, the agent writes and reports. No permission-asking loop for mechanical changes.
+2. **Dry-run then confirm** when the agent interpreted the request or chose values itself — "configure ce projet pour du dev agile" involves many agent-decided values, so it shows the diff/proposal first.
+3. **Bulk always dry-runs** — 50 writes deserve a per-item preview and an explicit go, even when requested explicitly.
 
 ## Available MCP Tools
 

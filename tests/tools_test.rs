@@ -1900,3 +1900,46 @@ async fn dry_run_bulk_update_items_preview() {
         json!("no fields to update")
     );
 }
+
+#[tokio::test]
+async fn dry_run_guidance_present_in_mutation_descriptions() {
+    // The guidance in tool descriptions is what makes agents dry-run
+    // spontaneously — pin it so a refactor can't silently drop it.
+    let expect: &[(&str, &str)] = &[
+        (
+            "leantime_create_ticket",
+            "Prefer dryRun: true first when you chose or inferred any value",
+        ),
+        (
+            "leantime_update_ticket",
+            "Prefer dryRun: true first when you interpreted the request or chose values yourself",
+        ),
+        (
+            "leantime_create_milestone",
+            "Prefer dryRun: true first when you chose or inferred any value",
+        ),
+        (
+            "leantime_update_milestone",
+            "Prefer dryRun: true first when you interpreted the request or chose values yourself",
+        ),
+        (
+            "leantime_bulk_create_tickets",
+            "ALWAYS call with dryRun: true first",
+        ),
+        (
+            "leantime_bulk_update_tickets",
+            "ALWAYS call with dryRun: true first",
+        ),
+    ];
+    for (name, needle) in expect {
+        let t = get_tool(name);
+        assert!(
+            t.description.contains(needle),
+            "{} description lost its dry-run guidance",
+            name
+        );
+    }
+    // log_time stays guidance-free by design.
+    let lt = get_tool("leantime_log_time");
+    assert!(!lt.description.contains("dryRun: true first"));
+}

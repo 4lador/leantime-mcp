@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.3.1 — 2026-09-07
+
+### Changed
+
+- **Dry-run agent guidance in tool descriptions (three-tier policy)**: mutation tools now instruct agents on when to validate first — execute directly when every value was explicitly given or resolves unambiguously ("passe #535 en Terminé" → one status, write and report); dry-run and confirm when the agent interpreted the request or chose values itself ("configure ce projet pour du dev agile" → show the diff/proposal first); always dry-run bulk batches (per-item preview, explicit approval). `leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets`; `leantime_log_time` stays guidance-free by design. A regression test pins the guidance strings.
+
 ## v2.3.0 — 2026-09-07
 
 ### Added
