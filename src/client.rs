@@ -5,6 +5,24 @@ const MAX_429_RETRIES: usize = 5;
 const MAX_NETWORK_RETRIES: usize = 2;
 const DEFAULT_RATE_LIMIT_PER_MIN: u32 = 10;
 
+/// Items requested per `tickets.getAll` call on completeness paths
+/// (backup, restore verification, milestone progress, project_context).
+/// Deliberately high: these results are processed server-side and never
+/// dumped into an LLM context whole. Override for huge instances via
+/// `LEANTIME_MCP_FETCH_LIMIT`; a non-parsable value falls back to the
+/// default. The real backstop is the 64 MB streaming response cap.
+pub const DEFAULT_FETCH_LIMIT: usize = 10_000;
+
+/// Effective completeness fetch limit (env override, no numeric clamp —
+/// admin-controlled, same trust level as LEANTIME_URL).
+pub fn fetch_limit() -> usize {
+    std::env::var("LEANTIME_MCP_FETCH_LIMIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_FETCH_LIMIT)
+}
+
 /// Leantime JSON-RPC client: adaptive 429 retry, 502/503/504 retry,
 /// status-map and user caches, response size cap.
 pub struct LeantimeClient {

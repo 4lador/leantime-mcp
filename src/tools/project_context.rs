@@ -105,7 +105,7 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
         let mut tickets = match c
             .call(
                 "tickets.getAll",
-                json!({"searchCriteria": {"currentProject": pid}, "limit": 500}),
+                json!({"searchCriteria": {"currentProject": pid}, "limit": crate::client::fetch_limit()}),
             )
             .await
         {
@@ -235,7 +235,7 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
             let mut milestone_list = c
                 .call(
                     "tickets.getAll",
-                    json!({"searchCriteria": {"currentProject": pid, "type": "milestone"}, "limit": 500}),
+                    json!({"searchCriteria": {"currentProject": pid, "type": "milestone"}, "limit": crate::client::fetch_limit()}),
                 )
                 .await
                 .ok()

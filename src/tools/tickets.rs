@@ -8,6 +8,11 @@ use crate::markdown::markdown_to_html;
 use super::shared::*;
 use super::{error_result, ok_result, rpc, ClientRef, Tool, ToolAnnotations};
 
+/// Agent-facing cap for leantime_list_tickets. Unlike the completeness
+/// paths (backup, restore verification…), this tool dumps its result into
+/// the LLM context, so the limit exists to protect the context window.
+const LIST_TICKETS_LIMIT: usize = 500;
+
 fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
@@ -37,7 +42,7 @@ fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value>
         match c
             .call(
                 "tickets.getAll",
-                json!({ "searchCriteria": sc, "limit": 500 }),
+                json!({ "searchCriteria": sc, "limit": LIST_TICKETS_LIMIT }),
             )
             .await
         {
@@ -45,6 +50,16 @@ fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value>
                 let sm = c.get_status_map(pid).await.unwrap_or(json!({}));
                 let mut items = r.as_array().cloned().unwrap_or_default();
                 c.enrich_with_statuses(&mut items, &sm);
+                // The limit protects the agent's context window (unlike the
+                // completeness paths, which use the configurable fetch limit).
+                if items.len() >= LIST_TICKETS_LIMIT {
+                    let mut out = json!({ "tickets": items });
+                    out["note"] = json!(format!(
+                        "showing first {} — refine filters (status, milestoneId, sprintId, type, search) to narrow the result",
+                        LIST_TICKETS_LIMIT
+                    ));
+                    return ok_result(&out);
+                }
                 ok_result(&json!(items))
             }
             Err(e) => error_result(&e.to_string()),

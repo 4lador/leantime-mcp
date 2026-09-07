@@ -12,7 +12,7 @@ fn h_list_milestones(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
     Box::pin(async move {
         let mut c = cl.lock().await;
         let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
-        match c.call("tickets.getAll", json!({"searchCriteria": {"currentProject": pid, "type": "milestone"}, "limit": 200})).await {
+        match c.call("tickets.getAll", json!({"searchCriteria": {"currentProject": pid, "type": "milestone"}, "limit": crate::client::fetch_limit()})).await {
             Ok(r) => {
                 let sm = c.get_status_map(pid).await.unwrap_or(json!({}));
                 let mut items = r.as_array().cloned().unwrap_or_default();
@@ -212,7 +212,7 @@ fn h_get_milestone_progress(
         let tickets = match c
             .call(
                 "tickets.getAll",
-                json!({"searchCriteria": {"milestone": mid, "currentProject": pid}, "limit": 500}),
+                json!({"searchCriteria": {"milestone": mid, "currentProject": pid}, "limit": crate::client::fetch_limit()}),
             )
             .await
         {

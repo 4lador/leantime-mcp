@@ -35,6 +35,7 @@ fn h_backup_project(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Valu
                 "tickets": r.ticket_count,
                 "sprints": r.sprint_count,
                 "fileSize": format!("{} bytes", r.file_size),
+                "warnings": r.warnings,
                 "note": "Comments excluded (fast mode) — run 'leantmcp backup --full' from the CLI for a complete backup including comments."
             })),
             Err(e) => error_result(&e),

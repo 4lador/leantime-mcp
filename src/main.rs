@@ -684,6 +684,9 @@ async fn handle_backup(args: &clap::ArgMatches) {
             if full {
                 println!("  (full backup — comments included)");
             }
+            for w in &r.warnings {
+                println!("⚠ {}", w);
+            }
         }
         Err(e) => {
             eprintln!("✗ {}", e);

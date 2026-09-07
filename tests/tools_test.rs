@@ -1180,7 +1180,14 @@ fn ctx_status_map() -> Value {
 /// Wire up the six happy-path mocks. Creation order matters: the milestone
 /// tickets.getAll mock is created AFTER the main one so it takes precedence
 /// for the request carrying `"type": "milestone"` (mockito: newest wins).
-async fn ctx_happy_mocks(server: &mut Server, sprints: Value, milestones: Value) {
+async fn ctx_happy_mocks(
+    server: &mut Server,
+    sprints: Value,
+    milestones: Value,
+) -> tokio::sync::MutexGuard<'static, ()> {
+    // Hold the fetch-limit lock: parallel env mutation in the override test
+    // would change fetch_limit() and break these limit-pinned mocks.
+    let _guard = FETCH_LIMIT_LOCK.lock().await;
     let _p = server
         .mock("POST", "/api/jsonrpc")
         .match_body(mockito::Matcher::PartialJsonString(
@@ -1211,7 +1218,7 @@ async fn ctx_happy_mocks(server: &mut Server, sprints: Value, milestones: Value)
         .mock("POST", "/api/jsonrpc")
         .match_body(mockito::Matcher::PartialJsonString(
             json!({"method": "leantime.rpc.tickets.getAll", "params": {
-                "searchCriteria": {"currentProject": "3"}, "limit": 500
+                "searchCriteria": {"currentProject": "3"}, "limit": 10000
             }})
             .to_string(),
         ))
@@ -1266,12 +1273,13 @@ async fn ctx_happy_mocks(server: &mut Server, sprints: Value, milestones: Value)
         .with_body(rpc_ok(ctx_status_map()))
         .create_async()
         .await;
+    _guard
 }
 
 #[tokio::test]
 async fn project_context_happy_path_full_shape() {
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(
+    let _ctx_guard = ctx_happy_mocks(
         &mut server,
         json!([
             {"id": "7", "name": "Sprint 4", "startDate": "2026-01-01", "endDate": "2030-12-31"},
@@ -1342,7 +1350,7 @@ async fn project_context_output_under_4kb() {
     let milestones: Vec<Value> = (0..25)
         .map(|i| json!({"id": format!("{}", 260 + i), "headline": format!("Phase {} — a reasonably long milestone name for sizing", i), "type": "milestone", "status": "1"}))
         .collect();
-    ctx_happy_mocks(&mut server, json!([]), Value::Array(milestones)).await;
+    let _ctx_guard = ctx_happy_mocks(&mut server, json!([]), Value::Array(milestones)).await;
 
     let r = call(
         "leantime_project_context",
@@ -1364,7 +1372,7 @@ async fn project_context_output_under_4kb() {
 #[tokio::test]
 async fn project_context_no_sprints_current_null() {
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(&mut server, json!([]), json!([])).await;
+    let _ctx_guard = ctx_happy_mocks(&mut server, json!([]), json!([])).await;
 
     let r = call(
         "leantime_project_context",
@@ -1381,7 +1389,7 @@ async fn project_context_no_sprints_current_null() {
 #[tokio::test]
 async fn project_context_upcoming_sprint_shape() {
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(
+    let _ctx_guard = ctx_happy_mocks(
         &mut server,
         json!([
             {"id": "1", "name": "past", "startDate": "2020-01-01", "endDate": "2020-02-01"},
@@ -1409,7 +1417,7 @@ async fn project_context_upcoming_sprint_shape() {
 #[tokio::test]
 async fn project_context_overdue_excludes_done() {
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(&mut server, json!([]), json!([])).await;
+    let _ctx_guard = ctx_happy_mocks(&mut server, json!([]), json!([])).await;
 
     let r = call(
         "leantime_project_context",
@@ -1428,7 +1436,7 @@ async fn project_context_overdue_excludes_done() {
 async fn project_context_include_milestones_false_omits_section() {
     let mut server = Server::new_async().await;
     // No milestone mock: the flag must prevent the milestone fetch entirely.
-    ctx_happy_mocks(&mut server, json!([]), json!([])).await;
+    let _ctx_guard = ctx_happy_mocks(&mut server, json!([]), json!([])).await;
 
     let r = call(
         "leantime_project_context",
@@ -1446,7 +1454,7 @@ async fn project_context_include_milestones_false_omits_section() {
 #[tokio::test]
 async fn project_context_computes_progress_when_official_absent() {
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(&mut server, json!([]), json!([])).await;
+    let _ctx_guard = ctx_happy_mocks(&mut server, json!([]), json!([])).await;
     // The progress mock in the helper answers 62.5; override the computation
     // path by asserting the official value flows through — the fallback is
     // exercised implicitly by the no-data tests (0 tickets → 0.0).
@@ -1492,7 +1500,7 @@ async fn project_context_reads_both_milestone_spellings() {
     // camelCase "milestoneId" — this pins the regression: all three
     // tickets must be attributed to milestone 260's progress.
     let mut server = Server::new_async().await;
-    ctx_happy_mocks(
+    let _ctx_guard = ctx_happy_mocks(
         &mut server,
         json!([]),
         json!([{"id": "260", "headline": "Phase 1", "type": "milestone", "status": "3"}]),
@@ -1515,6 +1523,7 @@ async fn project_context_reads_both_milestone_spellings() {
 async fn project_context_zero_storypoints_fall_back_to_default_effort() {
     // Restored/unestimated tickets carry storypoints: 0 — they must weigh
     // the default 3.0, not zero the whole milestone's progress.
+    let _guard = FETCH_LIMIT_LOCK.lock().await; // mocks pin the default limit
     let mut server = Server::new_async().await;
     // Replace the main ticket set: two tasks under milestone 260, both DONE,
     // storypoints 0 → each weighs 3.0 × 1.5 = 4.5 → 100%.
@@ -1522,7 +1531,7 @@ async fn project_context_zero_storypoints_fall_back_to_default_effort() {
         .mock("POST", "/api/jsonrpc")
         .match_body(mockito::Matcher::PartialJsonString(
             json!({"method": "leantime.rpc.tickets.getAll", "params": {
-                "searchCriteria": {"currentProject": "3"}, "limit": 500
+                "searchCriteria": {"currentProject": "3"}, "limit": 10000
             }})
             .to_string(),
         ))
@@ -1942,4 +1951,210 @@ async fn dry_run_guidance_present_in_mutation_descriptions() {
     // log_time stays guidance-free by design.
     let lt = get_tool("leantime_log_time");
     assert!(!lt.description.contains("dryRun: true first"));
+}
+
+// ---------------------------------------------------------------- fetch limit
+
+/// Env vars are process-global: tests that set LEANTIME_MCP_FETCH_LIMIT
+/// hold this lock (same pattern as POLICY_LOCK).
+static FETCH_LIMIT_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+#[tokio::test]
+async fn fetch_limit_env_override_reaches_the_wire() {
+    let _guard = FETCH_LIMIT_LOCK.lock().await;
+    std::env::set_var("LEANTIME_MCP_FETCH_LIMIT", "777");
+    let mut server = Server::new_async().await;
+    // Support mocks (limit-independent)
+    let _p = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.projects.getProject"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": 3, "name": "Vision", "state": "active"}),
+        ))
+        .create_async()
+        .await;
+    let _prog = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.projects.getProjectProgress"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"percentdone": "0"})))
+        .create_async()
+        .await;
+    let _sp = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.sprints.getAllSprints"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "3"}, "limit": 777
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+    // The milestone-fetch mock must ALSO expect 777 (mockito: newest wins,
+    // but keeping them coherent documents the behavior).
+    let _ms = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "3", "type": "milestone"}, "limit": 777
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_project_context",
+        json!({"projectId": "3"}),
+        &server.url(),
+    )
+    .await;
+    // Remove BEFORE any assertion so a panic can't leak the env var.
+    std::env::remove_var("LEANTIME_MCP_FETCH_LIMIT");
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    m.assert();
+}
+
+#[tokio::test]
+async fn fetch_limit_default_10000_on_the_wire() {
+    let _guard = FETCH_LIMIT_LOCK.lock().await; // serialize with the override test
+    std::env::remove_var("LEANTIME_MCP_FETCH_LIMIT");
+    let mut server = Server::new_async().await;
+    let _p = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.projects.getProject"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": 3, "name": "Vision", "state": "active"}),
+        ))
+        .create_async()
+        .await;
+    let _prog = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.projects.getProjectProgress"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"percentdone": "0"})))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "3"}, "limit": 10000
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_project_context",
+        json!({"projectId": "3", "includeMilestones": false, "includeRecentActivity": false}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, _) = parse(&r);
+    assert!(!is_err);
+    m.assert();
+}
+
+#[tokio::test]
+async fn list_tickets_notes_truncation_at_cap() {
+    let mut server = Server::new_async().await;
+    // Exactly LIST_TICKETS_LIMIT (500) items → response becomes
+    // {tickets: [...], note: "showing first 500 — refine filters…"}.
+    let items: Vec<Value> = (0..500)
+        .map(|i| json!({"id": format!("{}", i), "type": "task", "status": "3", "headline": "x"}))
+        .collect();
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "3"}, "limit": 500
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(Value::Array(items)))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_list_tickets",
+        json!({"projectId": "3"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert!(parsed.get("tickets").is_some(), "wrapped shape expected");
+    assert_eq!(parsed["tickets"].as_array().map(|a| a.len()), Some(500));
+    let note = parsed["note"].as_str().unwrap_or_default();
+    assert!(note.contains("showing first 500"), "{}", note);
+    m.assert();
 }
