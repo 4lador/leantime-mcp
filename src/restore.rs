@@ -354,6 +354,18 @@ pub async fn resolve_status_gaps_interactive(
         return Ok(build_status_mapping(backup_statuses, &json!({})));
     }
 
+    // Fetch the project name so the user knows exactly where to go
+    let project_name = client
+        .call("projects.getProject", json!({"id": project_id}))
+        .await
+        .ok()
+        .and_then(|p| {
+            p.get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| format!("id={}", project_id));
+
     println!("\n⚠ Status mapping needed:");
     for (_, label, stype, count) in gaps {
         println!(
@@ -362,7 +374,10 @@ pub async fn resolve_status_gaps_interactive(
         );
     }
     println!("\nThe Leantime API cannot create custom statuses.");
-    println!("Open Leantime → project settings → Statuses");
+    println!(
+        "Open Leantime → project \"{}\" (id={}) → Settings → Statuses",
+        project_name, project_id
+    );
     println!("and create these with the same names:\n");
     for (_, label, _, _) in gaps {
         println!("  • {}", label);

@@ -163,7 +163,7 @@ fn build_mapping_no_match_returns_none() {
 
     let mapping = build_status_mapping(&backup_statuses, &project_statuses);
     assert!(
-        mapping.get("Blocked").is_none(),
+        !mapping.contains_key("Blocked"),
         "should not map if label not found"
     );
 }
@@ -267,7 +267,7 @@ fn build_mapping_no_type_match_still_returns_none() {
 
     let mapping = build_status_mapping(&backup_statuses, &project_statuses);
     assert!(
-        mapping.get("Blocked").is_none(),
+        !mapping.contains_key("Blocked"),
         "no match → gap → interactive resolution needed"
     );
 }
