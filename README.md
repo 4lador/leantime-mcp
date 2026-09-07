@@ -13,13 +13,17 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 **Documentation**: [Migrating from v1.x](#migrating-from-v1x) · [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
+## What's new in v2.2.0
+
+- **`leantime_project_context`** — the full picture of a project in one call: progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint, milestone progress, ticket summary and recently modified items. Replaces 5-6 agent round-trips with a single response capped under 4 KB, timestamped `generatedAt`. (v2.1.0 added `leantmcp restore` — see [Backup & recovery](#backup--recovery).)
+
 ## What's new in v2.0.0
 
 v2.0.0 is a complete rewrite in Rust (v1.x was TypeScript/Deno — see [Migrating from v1.x](#migrating-from-v1x)). Beyond the language change:
 
 - **Backup & recovery**: `leantmcp backup` and the `leantime_backup_project` MCP tool dump a project to a timestamped JSON file — agents can trigger a cheap backup before bulk modifications
 - **Tool management**: `leantmcp tools enable|disable` lets you hide tools from agents entirely (zero context-window cost), per instance profile, with groups (`destructive`, `readonly`, `write`, `all`)
-- **MCP tool annotations**: all 41 tools carry `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint` so clients can group, gate and cache them intelligently
+- **MCP tool annotations**: all 42 tools carry `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint` so clients can group, gate and cache them intelligently
 - **`--instance` flag**: `leantmcp backup --instance prod` — target any keyring profile on any command, no env prefix needed
 - **24h cap on `leantime_log_time`**: entries over 24 hours are rejected (a timesheet line targets ONE date — beyond 24h is impossible data, typically a hallucinated value)
 - **Protocol negotiation**: supports MCP revisions `2024-11-05` and `2025-06-18`, echoes the client's version when known
@@ -46,7 +50,8 @@ Why the rewrite? The v1.x binary embedded the Deno/V8 runtime:
 
 ## Features
 
-- Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments, time tracking and **bulk operations** (41 tools)
+- Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments, time tracking and **bulk operations** (42 tools)
+- **`leantime_project_context`**: a composite first-call tool that hydrates full project context (progress, health, sprint, milestones, activity) in one round-trip — agents start reasoning instead of paging through lists
 - **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — still zero secrets
 - **Automatic 429 retry**: adaptive backoff that discovers the instance's rate limit from response headers — agents never handle rate limiting
 - Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor
@@ -137,7 +142,7 @@ Everyone on the team who clones the repo gets the server declaration for free; e
 
 ### Any other MCP client
 
-`leantmcp` is a standard stdio MCP server: point your client at the binary, no environment variables required (the keyring provides them). `LEANTIME_URL` / `LEANTIME_API_KEY` environment variables remain available as per-run overrides. Protocol revisions `2024-11-05` and `2025-06-18` are supported and negotiated at handshake (the client's version is echoed when known). All 41 tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can group, gate and cache them intelligently.
+`leantmcp` is a standard stdio MCP server: point your client at the binary, no environment variables required (the keyring provides them). `LEANTIME_URL` / `LEANTIME_API_KEY` environment variables remain available as per-run overrides. Protocol revisions `2024-11-05` and `2025-06-18` are supported and negotiated at handshake (the client's version is echoed when known). All 42 tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can group, gate and cache them intelligently.
 
 ### Multiple instances
 
@@ -297,6 +302,7 @@ Project hiding/deletion is intentionally not exposed.
 | Tool | Description |
 |------|-------------|
 | `leantime_backup_project` | Dump a project to a timestamped local JSON file (milestones, tickets, sprints — the response is a summary only, not the data) |
+| `leantime_project_context` | Full project overview in one call (progress, health, sprint, milestones, ticket summary, recent activity) — under 4 KB, the agent's natural first call |
 
 ## Key management
 
@@ -342,7 +348,7 @@ The MCP tool `leantime_backup_project` does the same fast backup and returns onl
 Disable tools you don't need — they disappear from `tools/list` entirely (zero context-window cost), and calling a disabled tool returns an actionable error instead of a generic "unknown tool".
 
 ```bash
-leantmcp tools list                                    # all 41 tools with their status
+leantmcp tools list                                    # all 42 tools with their status
 leantmcp tools disable leantime_delete_ticket         # one tool
 leantmcp tools disable destructive --instance local   # group on a specific profile
 leantmcp tools enable readonly                        # re-enable a group
@@ -360,7 +366,7 @@ leantmcp tools enable readonly
 Tool state is stored **per instance profile** (`~/.config/leantime/instances/<name>/tools.json`, mode 0600) — the same profile your harness config pins via `LEANTIME_INSTANCE`, so each instance can have its own tool set. Changes take effect on the next MCP session restart.
 
 **Why disable tools?**
-- **Reduce context cost**: 41 tool descriptions ≈ 4K tokens; trimming to what you use saves tokens per conversation
+- **Reduce context cost**: 42 tool descriptions ≈ 4K tokens; trimming to what you use saves tokens per conversation
 - **Safety**: disable destructive tools entirely — the agent can't even see they exist
 - **Simplicity**: fewer tools = faster agent decisions, less confusion
 - **Read-only mode**: `--preset readonly` is ideal for demonstrations or giving someone view-only access
@@ -403,7 +409,7 @@ export LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)"
 | `tests/tools_test.rs` (38) | Handlers via mockito: patch semantics, sprint full-field resend, id de-mangling, end-of-day timesheets, computed current sprint, destructive matrix (ask/deny/allow/invalid + 4-tool sweep), editorId validation, log_time validation (24h daily cap), bulk caps + happy/partial paths, comment crash recovery, enrichment |
 | `tests/key_rotate_test.rs` (6) | Rotation choreography: happy path + relations copy, verification failure leaves keyring untouched, unknown key aborts, relation-copy failure warns, creation refusal aborts |
 | `tests/e2e_readonly.rs` (1) | Opt-in (`LEANTIME_URL`+`LEANTIME_API_KEY`): projects non-vacuous, statuses shape, enrichment, milestones — with loud skips |
-| `tests/e2e/run.sh` (7 checks) | Binary-level smoke: MCP handshake, 41 tools, live API calls, assignment enforcement, doctor |
+| `tests/e2e/run.sh` (7 checks) | Binary-level smoke: MCP handshake, 42 tools, live API calls, assignment enforcement, doctor |
 | `tests/e2e_local.rs` (1, 8 sections) | **Exhaustive e2e** — opt-in with `LEANTIME_E2E=local`: scratch project, full tool surface, scoping/field-wiping regressions, destructive gating (incl. deny), bulk cycles, capture-only cleanup |
 
 ```bash

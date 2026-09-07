@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.2.0 — 2026-09-07
+
+### Added
+
+- **`leantime_project_context`** (42nd tool): the full picture of a project in a single call — project info and progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint (explicit `status` discriminator, `daysRemaining` vs `daysUntilStart`), milestones with weighted progress computed in memory, ticket summary by status and type, and recently modified items. Response capped under 4 KB (`generatedAt` up front, milestones max 15, names truncated at 40 chars) — designed as the agent's first call, replacing 5-6 round-trips. Milestone grouping reads both `milestoneid` and `milestoneId` spellings (see v2.1.0 restore).
+
+### Fixed
+
+- **Milestone progress with unestimated tickets**: storypoints of `0` now fall back to the default effort of 3.0 — a milestone whose tickets carry no estimates no longer reports 0% forever (`leantime_get_milestone_progress` and the new composite tool).
+- **`leantime_get_current_sprint` annotations**: `idempotentHint` is now `true`. Per the MCP spec the hint describes side effects, not response stability — a read-only call is idempotent even when its result changes over time. The internal `readonly_volatile` preset is retired.
+
 ## v2.1.0 — 2026-09-07
 
 ### Added
