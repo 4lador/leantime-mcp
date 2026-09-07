@@ -380,7 +380,7 @@ fn h_bulk_schedule(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
 }
 
 // ---------------------------------------------------------------------------
-// Registry — all 40 tools
+// Registry — bulk tools (part of the 42-tool registry)
 // ---------------------------------------------------------------------------
 
 pub(super) fn tools() -> Vec<Tool> {

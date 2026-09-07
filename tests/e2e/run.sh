@@ -43,14 +43,14 @@ R=$(run_mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVe
 expect_contains "handshake" "$R" '"name":"leantime-mcp"'
 expect_contains "version" "$R" 'serverInfo'
 
-# 2. tools/list → 41 tools
+# 2. tools/list → 42 tools
 R=$(printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"e2e","version":"1"}}}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n' | env LEANTIME_URL="$URL" LEANTIME_API_KEY="$KEY" timeout 10 "$BIN" serve 2>/dev/null | tail -1 || true)
 TOOL_COUNT=$(echo "$R" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('result',{}).get('tools',[])))" 2>/dev/null || echo 0)
-if [ "$TOOL_COUNT" -ge 41 ]; then
+if [ "$TOOL_COUNT" -ge 42 ]; then
     echo "  [OK] tools/list has $TOOL_COUNT tools"
     PASS=$((PASS+1))
 else
-    echo "  [FAIL] tools/list expected ≥41 tools, got $TOOL_COUNT"
+    echo "  [FAIL] tools/list expected ≥42 tools, got $TOOL_COUNT"
     FAIL=$((FAIL+1))
 fi
 

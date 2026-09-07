@@ -23,7 +23,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 ## What's new in v2.2.0
 
-- **`leantime_project_context`** — the full picture of a project in one call: progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint, milestone progress, ticket summary and recently modified items. Replaces 5-6 agent round-trips with a single response capped under 4 KB, timestamped `generatedAt`. (v2.1.0 added `leantmcp restore` — see [Backup & recovery](#backup--recovery).)
+- **`leantime_project_context`** — the full picture of a project in one call: progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint, milestone progress, ticket summary and recently modified items. Replaces 5-6 agent round-trips with a single response capped under 4 KB, timestamped `generatedAt`.
+
+## What's new in v2.1.0
+
+- **`leantmcp restore`** — rebuilds a backup into a NEW project (never merges with existing data): topological ordering (parents before subtasks), full ID remapping (milestones, sprints, tickets, comments), interactive status resolution and post-restore verification. See [Backup & recovery](#backup--recovery).
 
 ## What's new in v2.0.0
 
