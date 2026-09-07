@@ -31,6 +31,98 @@ pub(super) const HOUR_KINDS: [&str; 6] = [
 /// Maximum items per bulk batch.
 pub(super) const MAX_BATCH: usize = 50;
 
+/// Schema description of the `dryRun` parameter (shared by all mutation tools).
+pub(super) const DRY_RUN_DESC: &str =
+    "Validate without executing — returns what would change without making any API call";
+
+/// True when the caller asked for a dry run.
+pub(super) fn wants_dry_run(a: &Value) -> bool {
+    a.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Standard dry-run verdict. A failed validation is NOT an MCP error — the
+/// dry-run did its job; the agent reads `valid` and `errors`.
+pub(super) fn dry_run_result(
+    valid: bool,
+    errors: Vec<String>,
+    changes: Vec<Value>,
+    warnings: Vec<String>,
+) -> Value {
+    super::ok_result(&serde_json::json!({
+        "dryRun": true,
+        "valid": valid,
+        "errors": errors,
+        "changes": changes,
+        "warnings": warnings,
+    }))
+}
+
+/// Loose equality for dry-run from/to comparisons: numeric strings compare
+/// numerically ("3" == 3), everything else compares as strings.
+pub(super) fn loose_eq(a: &Value, b: &Value) -> bool {
+    if a == b {
+        return true;
+    }
+    let s = |v: &Value| match v {
+        Value::String(x) => x.clone(),
+        other => other.to_string(),
+    };
+    if let (Some(x), Some(y)) = (s(a).parse::<f64>().ok(), s(b).parse::<f64>().ok()) {
+        return x == y;
+    }
+    s(a) == s(b)
+}
+
+/// Build the dry-run change list for an update: `from`/`to` per provided
+/// field, resolved against the current entity. `status_map` (optional) adds
+/// a human-readable `label` on status changes. Returns (changes, warnings) —
+/// a warning is emitted when the field already holds the target value.
+/// `description` is deliberately NOT mapped here (markdown→HTML makes the
+/// from-value noisy); handlers push a `to`-only entry for it.
+pub(super) fn dry_run_changes(
+    args: &Value,
+    current: &Value,
+    field_map: &[(&str, &str)],
+    status_map: Option<&Value>,
+) -> (Vec<Value>, Vec<String>) {
+    let mut changes = Vec::new();
+    let mut warnings = Vec::new();
+    for (arg_key, entity_key) in field_map {
+        let to = match args.get(arg_key) {
+            Some(v) if !v.is_null() => v.clone(),
+            _ => continue,
+        };
+        let from = current.get(*entity_key).cloned().unwrap_or(Value::Null);
+        let same = loose_eq(&to, &from);
+        let mut entry = serde_json::json!({"field": arg_key, "from": from, "to": to});
+        if *arg_key == "status" {
+            if let Some(sm) = status_map {
+                let label = |v: &Value| -> String {
+                    let key = match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    sm.get(&key)
+                        .and_then(|l| l.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| key.clone())
+                };
+                entry["label"] = serde_json::json!(format!(
+                    "{} → {}",
+                    label(&entry["from"]),
+                    label(&entry["to"])
+                ));
+            }
+        }
+        if same {
+            warnings.push(format!("{} already has this value", arg_key));
+        }
+        changes.push(entry);
+    }
+    (changes, warnings)
+}
+
 /// Leantime services report errors as objects like `{msg, type: "error"}` —
 /// surface them as tool errors.
 pub(super) fn is_leantime_error(v: &Value) -> bool {

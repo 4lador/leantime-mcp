@@ -11,6 +11,50 @@ fn h_log_time(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + S
         let mut c = cl.lock().await;
         let tid = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
         let hours = a.get("hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let kind = a
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("GENERAL_BILLABLE");
+        let mode = a.get("mode").and_then(|v| v.as_str()).unwrap_or("add");
+
+        // Dry run: all local checks accumulated (never a single API call).
+        if wants_dry_run(&a) {
+            let mut errors = Vec::new();
+            if hours <= 0.0 {
+                errors.push("Hours must be a positive number.".to_string());
+            }
+            const MAX_HOURS_PER_DAY: f64 = 24.0;
+            if hours > MAX_HOURS_PER_DAY {
+                errors.push(format!(
+                    "Hours must be at most {} for a single day's entry (got {}). Split the entry across days or fix the value.",
+                    MAX_HOURS_PER_DAY, hours
+                ));
+            }
+            if !HOUR_KINDS.contains(&kind) {
+                errors.push(format!(
+                    "Invalid kind \"{}\". Valid kinds: {}",
+                    kind,
+                    HOUR_KINDS.join(", ")
+                ));
+            }
+            if mode != "add" && mode != "set" {
+                errors.push("Invalid mode: use \"add\" or \"set\".".to_string());
+            }
+            if !errors.is_empty() {
+                return dry_run_result(false, errors, vec![], vec![]);
+            }
+            let date = a
+                .get("date")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&chrono::Utc::now().format("%Y-%m-%d").to_string())
+                .to_string();
+            let changes = vec![json!({
+                "field": "timesheet entry",
+                "to": { "ticketId": tid, "hours": hours, "kind": kind, "mode": mode, "date": date }
+            })];
+            return dry_run_result(true, vec![], changes, vec![]);
+        }
+
         if hours <= 0.0 {
             return error_result("Hours must be a positive number.");
         }
@@ -160,7 +204,7 @@ fn h_delete_timesheet(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
 pub(super) fn tools() -> Vec<Tool> {
     vec![
         tool_with_annotations("leantime_log_time", "Log time on a ticket. mode \"add\" accumulates hours (default); mode \"set\" is idempotent (sets the total for that day/kind).",
-            vec![rs("ticketId", "The ticket ID"), rn("hours", "Hours to log (duration in decimal hours, max 24 — one entry covers a single day; split across days beyond that)"), os("kind", "Hour type (GENERAL_BILLABLE, GENERAL_NOT_BILLABLE, PROJECTMANAGEMENT, DEVELOPMENT, BUGFIXING_NOT_BILLABLE, TESTING; default GENERAL_BILLABLE)"), os("date", "Work date, YYYY-MM-DD (default today)"), os("description", "What was done"), os("mode", "add = accumulate (logTime), set = idempotent total (upsertTime). Default \"add\"")],
+            vec![rs("ticketId", "The ticket ID"), rn("hours", "Hours to log (duration in decimal hours, max 24 — one entry covers a single day; split across days beyond that)"), os("kind", "Hour type (GENERAL_BILLABLE, GENERAL_NOT_BILLABLE, PROJECTMANAGEMENT, DEVELOPMENT, BUGFIXING_NOT_BILLABLE, TESTING; default GENERAL_BILLABLE)"), os("date", "Work date, YYYY-MM-DD (default today)"), os("description", "What was done"), os("mode", "add = accumulate (logTime), set = idempotent total (upsertTime). Default \"add\""), ob("dryRun", DRY_RUN_DESC)],
             vec!["ticketId", "hours"], Box::new(h_log_time), ToolAnnotations::write()),
         tool("leantime_get_ticket_time", "Get time booked on a ticket: total hours and per-day breakdown",
             vec![rs("ticketId", "The ticket ID")], vec!["ticketId"], Box::new(h_get_ticket_time)),

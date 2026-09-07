@@ -27,6 +27,35 @@ fn check_batch_len(len: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Ticket payload for one bulk-create item (shared by the write path and
+/// the dry-run preview so they can never drift apart).
+fn build_create_payload(pid_num: &Value, t: &Value) -> Value {
+    let mut v = json!({ "headline": t.get("headline"), "projectId": pid_num.clone() });
+    if let Some(d) = t.get("description").and_then(|x| x.as_str()) {
+        v["description"] = json!(markdown_to_html(d));
+    }
+    for (k, dst) in [
+        ("type", "type"),
+        ("priority", "priority"),
+        ("editorId", "editorId"),
+        ("tags", "tags"),
+        ("dateToFinish", "dateToFinish"),
+        ("planHours", "planHours"),
+        ("dependingTicketId", "dependingTicketId"),
+    ] {
+        if let Some(x) = t.get(k) {
+            v[dst] = x.clone();
+        }
+    }
+    if let Some(x) = t.get("milestoneId") {
+        v["milestoneid"] = x.clone();
+    }
+    if let Some(x) = t.get("sprintId") {
+        v["sprint"] = x.clone();
+    }
+    v
+}
+
 fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
@@ -76,10 +105,50 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
             }
         }
         if !errors.is_empty() {
+            if wants_dry_run(&a) {
+                return dry_run_result(false, errors, vec![], vec![]);
+            }
             return error_result(&format!(
                 "Validation failed — NOTHING was created (all-or-nothing):\n{}",
                 errors.join("\n")
             ));
+        }
+
+        // ---- Phase 1.5: dry run — same payload preview, zero writes ----
+        if wants_dry_run(&a) {
+            let pid_num: Value = pid.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(pid));
+            let items: Vec<Value> = tickets
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let v = build_create_payload(&pid_num, t);
+                    let fields: Vec<Value> = v
+                        .as_object()
+                        .map(|o| {
+                            o.iter()
+                                .map(|(k, val)| json!({"field": k, "to": val}))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    json!({
+                        "index": i + 1,
+                        "valid": true,
+                        "headline": t.get("headline"),
+                        "fields": fields,
+                    })
+                })
+                .collect();
+            let changes = vec![
+                json!({"field": "tickets", "to": format!("{} items would be created", items.len())}),
+            ];
+            return ok_result(&json!({
+                "dryRun": true,
+                "valid": true,
+                "errors": [],
+                "changes": changes,
+                "warnings": [],
+                "items": items,
+            }));
         }
 
         // ---- Phase 2: Sequential creation ----
@@ -88,29 +157,7 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
         let pid_num: Value = pid.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(pid));
         let mut results = Vec::new();
         for (i, t) in tickets.iter().enumerate() {
-            let mut v = json!({ "headline": t.get("headline"), "projectId": pid_num });
-            if let Some(d) = t.get("description").and_then(|x| x.as_str()) {
-                v["description"] = json!(markdown_to_html(d));
-            }
-            for (k, dst) in [
-                ("type", "type"),
-                ("priority", "priority"),
-                ("editorId", "editorId"),
-                ("tags", "tags"),
-                ("dateToFinish", "dateToFinish"),
-                ("planHours", "planHours"),
-                ("dependingTicketId", "dependingTicketId"),
-            ] {
-                if let Some(x) = t.get(k) {
-                    v[dst] = x.clone();
-                }
-            }
-            if let Some(x) = t.get("milestoneId") {
-                v["milestoneid"] = x.clone();
-            }
-            if let Some(x) = t.get("sprintId") {
-                v["sprint"] = x.clone();
-            }
+            let v = build_create_payload(&pid_num, t);
 
             match c.call("tickets.addTicket", json!({ "values": v })).await {
                 Ok(r) => {
@@ -131,6 +178,39 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
         }
         ok_result(&bulk_summary(results))
     })
+}
+
+/// Patch payload for one bulk-update item (shared by the write path and
+/// the dry-run preview).
+fn build_update_payload(u: &Value) -> Value {
+    let mut ch = json!({});
+    if let Some(v) = u.get("headline") {
+        ch["headline"] = v.clone();
+    }
+    if let Some(d) = u.get("description").and_then(|x| x.as_str()) {
+        ch["description"] = json!(markdown_to_html(d));
+    }
+    for (k, dst) in [
+        ("type", "type"),
+        ("status", "status"),
+        ("priority", "priority"),
+        ("editorId", "editorId"),
+        ("tags", "tags"),
+        ("storypoints", "storypoints"),
+        ("dateToFinish", "dateToFinish"),
+        ("planHours", "planHours"),
+    ] {
+        if let Some(x) = u.get(k) {
+            ch[dst] = x.clone();
+        }
+    }
+    if let Some(x) = u.get("milestoneId") {
+        ch["milestoneid"] = x.clone();
+    }
+    if let Some(x) = u.get("sprintId") {
+        ch["sprint"] = x.clone();
+    }
+    ch
 }
 
 fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
@@ -162,6 +242,18 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 };
                 if !users.iter().any(|(uid, _)| *uid == id_str) {
                     // Message byte-parity with the TS edition (bulk.ts).
+                    if wants_dry_run(&a) {
+                        return dry_run_result(
+                            false,
+                            vec![format!(
+                                "editorId \"{}\" does not exist — NOTHING was updated. Available: {}",
+                                id_str,
+                                users_list(&users)
+                            )],
+                            vec![],
+                            vec![],
+                        );
+                    }
                     return error_result(&format!(
                         "editorId \"{}\" does not exist — NOTHING was updated. Available: {}",
                         id_str,
@@ -171,6 +263,42 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
             }
         }
 
+        // ---- Dry run: per-item verdicts, zero writes ----
+        if wants_dry_run(&a) {
+            let mut items = Vec::new();
+            let mut all_valid = true;
+            for (i, u) in updates.iter().enumerate() {
+                let tid = match u.get("ticketId") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                let ch = build_update_payload(u);
+                if ch.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+                    all_valid = false;
+                    items.push(json!({ "index": i + 1, "id": tid, "valid": false, "errors": ["no fields to update"] }));
+                    continue;
+                }
+                let fields: Vec<Value> = ch
+                    .as_object()
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, val)| json!({"field": k, "to": val}))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                items.push(json!({ "index": i + 1, "id": tid, "valid": true, "fields": fields }));
+            }
+            return ok_result(&json!({
+                "dryRun": true,
+                "valid": all_valid,
+                "errors": [],
+                "changes": [],
+                "warnings": [],
+                "items": items,
+            }));
+        }
+
         let mut results = Vec::new();
         for (i, u) in updates.iter().enumerate() {
             let tid = match u.get("ticketId") {
@@ -178,33 +306,7 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 Some(other) => other.to_string(),
                 None => String::new(),
             };
-            let mut ch = json!({});
-            if let Some(v) = u.get("headline") {
-                ch["headline"] = v.clone();
-            }
-            if let Some(d) = u.get("description").and_then(|x| x.as_str()) {
-                ch["description"] = json!(markdown_to_html(d));
-            }
-            for (k, dst) in [
-                ("type", "type"),
-                ("status", "status"),
-                ("priority", "priority"),
-                ("editorId", "editorId"),
-                ("tags", "tags"),
-                ("storypoints", "storypoints"),
-                ("dateToFinish", "dateToFinish"),
-                ("planHours", "planHours"),
-            ] {
-                if let Some(x) = u.get(k) {
-                    ch[dst] = x.clone();
-                }
-            }
-            if let Some(x) = u.get("milestoneId") {
-                ch["milestoneid"] = x.clone();
-            }
-            if let Some(x) = u.get("sprintId") {
-                ch["sprint"] = x.clone();
-            }
+            let ch = build_update_payload(u);
 
             if ch.as_object().map(|o| o.is_empty()).unwrap_or(true) {
                 results.push(json!({ "index": i + 1, "ok": false, "id": tid, "error": "no fields to update" }));
@@ -285,10 +387,10 @@ pub(super) fn tools() -> Vec<Tool> {
     let rate = RATE_LIMIT_NOTE;
     vec![
         tool_with_annotations("leantime_bulk_create_tickets", format!("Create multiple tickets in one call (max {}). ALL items are validated BEFORE anything is created — if any item fails validation (missing assignment, unknown editorId), nothing is created. Descriptions are Markdown, converted to rich HTML per ticket. Each item requires editorId or unassigned: true. {}", MAX_BATCH, rate),
-            vec![rs("projectId", "The project ID"), ("tickets".to_string(), json!({"type": "array", "description": format!("Array of ticket specifications (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH}))],
+            vec![rs("projectId", "The project ID"), ("tickets".to_string(), json!({"type": "array", "description": format!("Array of ticket specifications (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH})), ob("dryRun", DRY_RUN_DESC)],
             vec!["projectId", "tickets"], Box::new(h_bulk_create), ToolAnnotations::write()),
         tool_with_annotations("leantime_bulk_update_tickets", format!("Update multiple tickets in one call (max {}). Uses the safe patch API — only provided fields change, others are never wiped. Results are per-item: some may succeed while others fail. {}", MAX_BATCH, rate),
-            vec![rs("projectId", "The project ID"), ("updates".to_string(), json!({"type": "array", "description": format!("Array of ticket updates (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH}))],
+            vec![rs("projectId", "The project ID"), ("updates".to_string(), json!({"type": "array", "description": format!("Array of ticket updates (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH})), ob("dryRun", DRY_RUN_DESC)],
             vec!["projectId", "updates"], Box::new(h_bulk_update), ToolAnnotations::write()),
         tool_with_annotations("leantime_bulk_schedule_tickets", format!("Schedule multiple tickets at once (max {}): assign to a sprint and/or set editFrom/editTo dates. Uses the safe patch API. {}", MAX_BATCH, rate),
             vec![rs("projectId", "The project ID"), ("schedules".to_string(), json!({"type": "array", "description": format!("Array of ticket schedules (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH}))],

@@ -75,6 +75,9 @@ fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
             Err(e) => return error_result(&e),
         };
         if let Err(e) = check_assignment(&a, &users) {
+            if wants_dry_run(&a) {
+                return dry_run_result(false, vec![e], vec![], vec![]);
+            }
             return error_result(&e);
         }
 
@@ -102,6 +105,18 @@ fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
         }
         if let Some(x) = a.get("sprintId") {
             v["sprint"] = x.clone();
+        }
+
+        if wants_dry_run(&a) {
+            let changes: Vec<Value> = v
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .map(|(k, val)| json!({"field": k, "to": val}))
+                        .collect()
+                })
+                .unwrap_or_default();
+            return dry_run_result(true, vec![], changes, vec![]);
         }
 
         match c.call("tickets.addTicket", json!({ "values": v })).await {
@@ -162,7 +177,58 @@ fn h_update_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
         }
 
         if ch.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            if wants_dry_run(&a) {
+                return dry_run_result(
+                    false,
+                    vec!["Nothing to update: provide at least one field to change.".into()],
+                    vec![],
+                    vec![],
+                );
+            }
             return error_result("Nothing to update: provide at least one field to change.");
+        }
+        if wants_dry_run(&a) {
+            // One read to resolve from-values (reads are harmless — mutations
+            // never happen on a dry run).
+            let ticket = match c.call("tickets.getTicket", json!({"id": tid})).await {
+                Ok(t) if !t.is_boolean() && !is_leantime_error(&t) => t,
+                Ok(_) => {
+                    return dry_run_result(
+                        false,
+                        vec![format!("Ticket {} not found.", tid)],
+                        vec![],
+                        vec![],
+                    )
+                }
+                Err(e) => return error_result(&e.to_string()),
+            };
+            let pid = ticket
+                .get("projectId")
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            let sm = c.get_status_map(&pid).await.unwrap_or(json!({}));
+            let field_map: &[(&str, &str)] = &[
+                ("headline", "headline"),
+                ("type", "type"),
+                ("priority", "priority"),
+                ("status", "status"),
+                ("editorId", "editorId"),
+                ("tags", "tags"),
+                ("storypoints", "storypoints"),
+                ("dateToFinish", "dateToFinish"),
+                ("planHours", "planHours"),
+                ("dependingTicketId", "dependingTicketId"),
+                ("milestoneId", "milestoneid"),
+                ("sprintId", "sprint"),
+            ];
+            let (mut changes, warnings) = dry_run_changes(&a, &ticket, field_map, Some(&sm));
+            if let Some(d) = a.get("description").and_then(|x| x.as_str()) {
+                changes.push(json!({"field": "description", "to": d}));
+            }
+            return dry_run_result(true, vec![], changes, warnings);
         }
         match c
             .call("tickets.patch", json!({ "id": tid, "params": ch }))
@@ -273,10 +339,10 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_get_ticket", "Get details of a specific ticket/task",
             vec![rs("projectId", "The project ID"), rs("ticketId", "The ticket ID")], vec!["projectId", "ticketId"], Box::new(h_get_ticket)),
         tool_with_annotations("leantime_create_ticket", format!("Create a new ticket/task in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned.", md, assignment),
-            vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate")],
+            vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC)],
             vec!["projectId", "headline"], Box::new(h_create_ticket), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_ticket", format!("Update an existing ticket/task. Only the provided fields are changed (Leantime's patch API — other fields are never wiped). The description is {} and replaces the previous description entirely. Only set editorId when you intend to change the assignment (validate user IDs with leantime_list_users).", md),
-            vec![rs("ticketId", "The ticket ID"), os("headline", "New ticket title"), os("description", format!("New description in {}", md)), os("type", "New ticket type"), on("status", "New status ID"), on("priority", "New priority (1-5)"), os("milestoneId", "New milestone ID"), os("sprintId", "New sprint ID"), os("editorId", "New assigned user ID (validates against leantime_list_users)"), os("tags", "New comma-separated tags"), os("storypoints", "New story points"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate")],
+            vec![rs("ticketId", "The ticket ID"), os("headline", "New ticket title"), os("description", format!("New description in {}", md)), os("type", "New ticket type"), on("status", "New status ID"), on("priority", "New priority (1-5)"), os("milestoneId", "New milestone ID"), os("sprintId", "New sprint ID"), os("editorId", "New assigned user ID (validates against leantime_list_users)"), os("tags", "New comma-separated tags"), os("storypoints", "New story points"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC)],
             vec!["ticketId"], Box::new(h_update_ticket), ToolAnnotations::write()),
         tool_with_annotations("leantime_delete_ticket", "Delete a ticket. Destructive: requires explicit user approval (confirm: true) unless LEANTIME_MCP_DESTRUCTIVE_POLICY is set otherwise. Prefer updating the status to a 'done/cancelled' state when possible.",
             vec![rs("ticketId", "The ticket ID"), ob("confirm", "MUST be true to actually delete (ask the user for explicit approval first)")],

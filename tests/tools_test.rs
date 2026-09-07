@@ -1598,3 +1598,305 @@ async fn project_context_zero_storypoints_fall_back_to_default_effort() {
     assert_eq!(parsed["milestones"][0]["percentDone"], json!(100.0));
     assert_eq!(parsed["milestones"][0]["tickets"], json!(2));
 }
+
+// ---------------------------------------------------------------- dry-run
+
+/// users.getAll mock with a single user: id "1" = Ada Lovelace.
+async fn dr_users_mock(server: &mut Server) {
+    let _u = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "Lovelace"}]),
+        ))
+        .create_async()
+        .await;
+}
+
+#[tokio::test]
+async fn dry_run_create_ticket_valid_no_write() {
+    let mut server = Server::new_async().await;
+    dr_users_mock(&mut server).await;
+    // No addTicket mock: if the handler tried to write, mockito would reject
+    // the request and the result would be an error.
+
+    let r = call(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "Dry run me", "editorId": "1", "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["dryRun"], json!(true));
+    assert_eq!(parsed["valid"], json!(true));
+    assert_eq!(parsed["errors"], json!([]));
+    let fields: Vec<String> = parsed["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["field"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(fields.contains(&"headline".to_string()), "{:?}", fields);
+    assert!(fields.contains(&"editorId".to_string()), "{:?}", fields);
+    assert!(fields.contains(&"projectId".to_string()), "{:?}", fields);
+}
+
+#[tokio::test]
+async fn dry_run_create_ticket_invalid_editor_id() {
+    let mut server = Server::new_async().await;
+    dr_users_mock(&mut server).await;
+
+    let r = call(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "X", "editorId": "999", "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed); // failed validation ≠ MCP error
+    assert_eq!(parsed["valid"], json!(false));
+    let msg = parsed["errors"][0].as_str().unwrap_or_default();
+    assert!(msg.contains("editorId \"999\" does not exist"), "{}", msg);
+    assert!(msg.contains("Available users"), "{}", msg);
+}
+
+#[tokio::test]
+async fn dry_run_create_ticket_missing_assignment() {
+    let mut server = Server::new_async().await;
+    dr_users_mock(&mut server).await;
+
+    let r = call(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "X", "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(false));
+    let msg = parsed["errors"][0].as_str().unwrap_or_default();
+    assert!(msg.contains("Assignment required"), "{}", msg);
+}
+
+#[tokio::test]
+async fn dry_run_update_ticket_from_to_with_status_label() {
+    let mut server = Server::new_async().await;
+    let _t = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "123"}})
+                .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "123", "projectId": "3", "headline": "Old", "status": "3"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({
+            "3": {"name": "Done", "statusType": "DONE"},
+            "2": {"name": "In Progress", "statusType": "IN_PROGRESS"}
+        })))
+        .create_async()
+        .await;
+    // No tickets.patch mock: a write attempt would fail the test.
+
+    let r = call(
+        "leantime_update_ticket",
+        json!({"ticketId": "123", "status": 2, "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(true));
+    assert_eq!(parsed["changes"][0]["field"], json!("status"));
+    assert_eq!(parsed["changes"][0]["from"], json!("3"));
+    assert_eq!(parsed["changes"][0]["to"], json!(2));
+    assert_eq!(parsed["changes"][0]["label"], json!("Done → In Progress"));
+    assert_eq!(parsed["warnings"], json!([]));
+}
+
+#[tokio::test]
+async fn dry_run_update_ticket_same_value_warns() {
+    let mut server = Server::new_async().await;
+    let _t = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "123"}})
+                .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"id": "123", "projectId": "3", "status": 3})))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_update_ticket",
+        json!({"ticketId": "123", "status": "3", "dryRun": true}), // "3" vs 3 — loose equality
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(true));
+    let w = parsed["warnings"][0].as_str().unwrap_or_default();
+    assert!(w.contains("status already has this value"), "{}", w);
+}
+
+#[tokio::test]
+async fn dry_run_absent_executes_mutation() {
+    let mut server = Server::new_async().await;
+    dr_users_mock(&mut server).await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([777])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "Real write", "editorId": "1"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed, json!({"id": 777}));
+    m.assert(); // the write DID happen
+}
+
+#[tokio::test]
+async fn dry_run_log_time_accumulates_local_errors() {
+    let server = Server::new_async().await;
+    // No mocks at all: log_time dry-run must be 100% local.
+    let r = call(
+        "leantime_log_time",
+        json!({"ticketId": "9", "hours": 30, "kind": "NOPE", "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(false));
+    let errors: Vec<String> = parsed["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.as_str().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(errors.len(), 2, "{:?}", errors); // both problems, not just the first
+    assert!(
+        errors.iter().any(|e| e.contains("at most 24")),
+        "{:?}",
+        errors
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Invalid kind")),
+        "{:?}",
+        errors
+    );
+}
+
+#[tokio::test]
+async fn dry_run_log_time_valid_echoes_entry() {
+    let server = Server::new_async().await;
+    let r = call(
+        "leantime_log_time",
+        json!({"ticketId": "9", "hours": 2.5, "kind": "TESTING", "date": "2026-09-07", "dryRun": true}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(true));
+    assert_eq!(parsed["changes"][0]["field"], json!("timesheet entry"));
+    assert_eq!(parsed["changes"][0]["to"]["hours"], json!(2.5));
+    assert_eq!(parsed["changes"][0]["to"]["kind"], json!("TESTING"));
+}
+
+#[tokio::test]
+async fn dry_run_bulk_create_reports_items_without_writing() {
+    let mut server = Server::new_async().await;
+    dr_users_mock(&mut server).await;
+
+    let r = call(
+        "leantime_bulk_create_tickets",
+        json!({"projectId": "3", "dryRun": true, "tickets": [
+            {"headline": "Good one", "editorId": "1"},
+            {"headline": "Bad editor", "editorId": "999"},
+            {"headline": "No assignment"}
+        ]}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(false));
+    let errors: Vec<String> = parsed["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.as_str().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(errors.len(), 2, "{:?}", errors);
+    assert!(errors[0].contains("Item 2"), "{}", errors[0]);
+    assert!(errors[0].contains("does not exist"), "{}", errors[0]);
+    assert!(errors[1].contains("Item 3"), "{}", errors[1]);
+    assert!(errors[1].contains("assignment required"), "{}", errors[1]);
+}
+
+#[tokio::test]
+async fn dry_run_bulk_update_items_preview() {
+    let server = Server::new_async().await;
+    // No editorId in any item → no users fetch; no patch mock: no writes.
+    let r = call(
+        "leantime_bulk_update_tickets",
+        json!({"projectId": "3", "dryRun": true, "updates": [
+            {"ticketId": "10", "status": 3},
+            {"ticketId": "11"}
+        ]}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["valid"], json!(false));
+    assert_eq!(parsed["items"][0]["id"], json!("10"));
+    assert_eq!(parsed["items"][0]["valid"], json!(true));
+    assert_eq!(parsed["items"][0]["fields"][0]["field"], json!("status"));
+    assert_eq!(parsed["items"][1]["valid"], json!(false));
+    assert_eq!(
+        parsed["items"][1]["errors"][0],
+        json!("no fields to update")
+    );
+}

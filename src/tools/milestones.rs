@@ -47,6 +47,9 @@ fn h_create_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
             Err(e) => return error_result(&e),
         };
         if let Err(e) = check_assignment(&a, &users) {
+            if wants_dry_run(&a) {
+                return dry_run_result(false, vec![e], vec![], vec![]);
+            }
             return error_result(&e);
         }
 
@@ -64,6 +67,18 @@ fn h_create_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
         }
         if let Some(x) = a.get("dependentMilestone") {
             v["milestoneid"] = x.clone();
+        }
+
+        if wants_dry_run(&a) {
+            let changes: Vec<Value> = v
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .map(|(k, val)| json!({"field": k, "to": val}))
+                        .collect()
+                })
+                .unwrap_or_default();
+            return dry_run_result(true, vec![], changes, vec![]);
         }
 
         match c.call("tickets.addTicket", json!({"values": v})).await {
@@ -115,7 +130,51 @@ fn h_update_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
         }
 
         if ch.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            if wants_dry_run(&a) {
+                return dry_run_result(
+                    false,
+                    vec!["Nothing to update: provide at least one field to change.".into()],
+                    vec![],
+                    vec![],
+                );
+            }
             return error_result("Nothing to update: provide at least one field to change.");
+        }
+        if wants_dry_run(&a) {
+            // One read to resolve from-values (reads are harmless — mutations
+            // never happen on a dry run).
+            let ms = match c.call("tickets.getTicket", json!({"id": mid})).await {
+                Ok(m) if !m.is_boolean() && !is_leantime_error(&m) => m,
+                Ok(_) => {
+                    return dry_run_result(
+                        false,
+                        vec![format!("Milestone {} not found.", mid)],
+                        vec![],
+                        vec![],
+                    )
+                }
+                Err(e) => return error_result(&e.to_string()),
+            };
+            let pid = ms
+                .get("projectId")
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            let sm = c.get_status_map(&pid).await.unwrap_or(json!({}));
+            let field_map: &[(&str, &str)] = &[
+                ("headline", "headline"),
+                ("status", "status"),
+                ("editorId", "editorId"),
+                ("dateToFinish", "dateToFinish"),
+                ("dependentMilestone", "milestoneid"),
+            ];
+            let (mut changes, warnings) = dry_run_changes(&a, &ms, field_map, Some(&sm));
+            if let Some(d) = a.get("description").and_then(|x| x.as_str()) {
+                changes.push(json!({"field": "description", "to": d}));
+            }
+            return dry_run_result(true, vec![], changes, warnings);
         }
         // quickUpdateMilestone reads projectId from the session (unset for API
         // keys) — use the safe generic ticket patch instead.
@@ -249,10 +308,10 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_get_milestone", "Get details of a specific milestone",
             vec![rs("projectId", "The project ID"), rs("milestoneId", "The milestone ID")], vec!["projectId", "milestoneId"], Box::new(h_get_milestone)),
         tool_with_annotations("leantime_create_milestone", format!("Create a milestone in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned.", md, assignment),
-            vec![rs("projectId", "The project ID"), rs("headline", "Milestone title"), os("description", format!("Milestone description in {}", md)), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned milestone"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependentMilestone", "Parent milestone ID")],
+            vec![rs("projectId", "The project ID"), rs("headline", "Milestone title"), os("description", format!("Milestone description in {}", md)), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned milestone"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependentMilestone", "Parent milestone ID"), ob("dryRun", DRY_RUN_DESC)],
             vec!["projectId", "headline"], Box::new(h_create_milestone), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_milestone", format!("Update an existing milestone. Only the provided fields are changed (Leantime's patch API — other fields are never wiped). The description is {}.", md),
-            vec![rs("milestoneId", "The milestone ID"), os("headline", "New milestone title"), os("description", format!("New description in {}", md)), os("editorId", "New assigned user ID (validates against leantime_list_users)"), on("status", "New status ID"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependentMilestone", "New parent milestone ID")],
+            vec![rs("milestoneId", "The milestone ID"), os("headline", "New milestone title"), os("description", format!("New description in {}", md)), os("editorId", "New assigned user ID (validates against leantime_list_users)"), on("status", "New status ID"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependentMilestone", "New parent milestone ID"), ob("dryRun", DRY_RUN_DESC)],
             vec!["milestoneId"], Box::new(h_update_milestone), ToolAnnotations::write()),
         tool("leantime_get_milestone_progress", "Get the completion percentage of a milestone (weighted by effort and priority of its tickets, mirroring Leantime's own formula)",
             vec![rs("milestoneId", "The milestone ID")], vec!["milestoneId"], Box::new(h_get_milestone_progress)),
