@@ -4,6 +4,8 @@
 //! - [`client`] — JSON-RPC HTTP client with adaptive 429 retry and caches
 //! - [`config`] — multi-instance keyring (`~/.config/leantime/instances/`)
 //! - [`tools`] — the 41 MCP tools, split by domain
+//! - [`backup`] — project backup to timestamped JSON files
+//! - [`restore`] — project restore from backup files
 //! - [`markdown`] — deterministic Markdown → rich HTML (byte-parity with the
 //!   TypeScript edition)
 //! - [`harness`] — writes MCP server configs for opencode, Claude, Cursor, Codex
@@ -27,5 +29,7 @@ pub mod doctor;
 pub mod harness;
 /// Deterministic Markdown → TipTap-compatible HTML converter.
 pub mod markdown;
+/// Project restore from backup files.
+pub mod restore;
 /// The 41 MCP tools.
 pub mod tools;

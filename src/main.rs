@@ -122,6 +122,14 @@ async fn main() {
                     .help("List existing backups")),
         )
         .subcommand(
+            Command::new("restore")
+                .about("Restore a backup file to a NEW project (never merges with existing data)")
+                .arg(Arg::new("file").index(1).required(true).value_name("FILE")
+                    .help("Path to the backup JSON file"))
+                .arg(Arg::new("confirm").long("confirm").action(clap::ArgAction::SetTrue)
+                    .help("Execute the restore (without this flag, only shows a dry-run plan)")),
+        )
+        .subcommand(
             Command::new("tools")
                 .about("Enable/disable MCP tools on this server")
                 .subcommand(Command::new("list").about("List all tools with their status"))
@@ -159,6 +167,7 @@ async fn main() {
         Some(("instance", sub)) => handle_instance(sub),
         Some(("setup", sub)) => handle_setup(sub),
         Some(("backup", args)) => handle_backup(args).await,
+        Some(("restore", args)) => handle_restore(args).await,
         Some(("tools", sub)) => handle_tools(sub),
         Some(("doctor", _)) => {
             doctor::run_doctor().await;
@@ -822,6 +831,65 @@ fn handle_tools(sub: &clap::ArgMatches) {
         }
         _ => {
             eprintln!("Usage: leantmcp tools list|enable|disable <tool|group>");
+            std::process::exit(1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// restore — rebuild a backup into a NEW project
+// ---------------------------------------------------------------------------
+
+async fn handle_restore(args: &clap::ArgMatches) {
+    let file = args
+        .get_one::<String>("file")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let confirm = args.get_flag("confirm");
+
+    // Validate the backup structure
+    let backup = match leantmcp::restore::validate_backup(std::path::Path::new(file)) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("✗ {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Dry-run plan
+    let plan = leantmcp::restore::plan_restore(&backup);
+    println!("=== Dry-run ===");
+    println!("{}", plan.summary());
+
+    if !confirm {
+        println!("\nRun with --confirm to execute.");
+        return;
+    }
+
+    // Preflight: check instance is reachable
+    let env = match config::resolve_server_env() {
+        Ok(e) => e,
+        Err(msg) => {
+            eprintln!("Error: {}", msg);
+            std::process::exit(1);
+        }
+    };
+    let mut c = client::LeantimeClient::new(&env.url, &env.api_key);
+    if let Err(e) = c.call("users.getAll", json!({})).await {
+        eprintln!("✗ Instance unreachable: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\n=== Restoring... ===");
+    match leantmcp::restore::execute_restore(&mut c, &backup).await {
+        Ok(r) => {
+            println!("✓ {}", r.summary());
+            for w in &r.warnings {
+                println!("  ⚠ {}", w);
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ {}", e);
             std::process::exit(1);
         }
     }
