@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.0 — 2026-09-07
+
+### Added
+
+- **Restore**: `leantmcp restore <file> [--confirm]` — rebuilds a backup into a NEW project (never merges with existing data). Topological sort (parents before subtasks), ID remapping (milestones, sprints, tickets, comments), interactive status resolution (label match → statusType fallback → prompt with project name/ID), v3.7.3 comment crash recovery, post-restore verification. 13 unit tests + live-tested with 279-ticket Vision backup (208 subtasks, 156 milestone refs, 5 sprints — all cross-references remapped correctly, 0 failures).
+
 ## v2.0.0 — 2026-09-07
 
 Complete rewrite in Rust (v1.x was TypeScript/Deno, now on the `frozen-legacy-ts` branch). The keyring, credentials and harness configs are fully compatible — v2.0.0 is a drop-in replacement. See [Migrating from v1.x](README.md#migrating-from-v1x).

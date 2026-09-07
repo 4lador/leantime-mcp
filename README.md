@@ -327,11 +327,15 @@ leantmcp backup                      # backup the first project on the active in
 leantmcp backup --project 3         # specific project
 leantmcp backup --project 3 --full  # include per-ticket comments (slower)
 leantmcp backup --list              # show existing backups
+leantmcp restore backup.json        # dry-run: shows what would be restored
+leantmcp restore backup.json --confirm  # execute the restore
 ```
 
 Backups land in `~/.config/leantime/backups/<project-name>-<timestamp>.json` (mode 0600). Fast mode captures milestones, tickets and sprints in 3 API calls. `--full` adds per-ticket comments at 1 call per ticket — on a rate-limited instance (~10 req/min), expect roughly 1 minute per 10 tickets.
 
 The MCP tool `leantime_backup_project` does the same fast backup and returns only a summary (path + counts), so agents can trigger it cheaply — e.g. before bulk modifications.
+
+**Restore** rebuilds a backup into a **NEW project** (never merges with existing data — zero risk of overwriting). Tickets are created in topological order (parents before subtasks), with all cross-references remapped (milestone, sprint, parent ticket). If the backup contains custom statuses that don't exist in the new project, the restore prompts interactively: it asks you to create the statuses in Leantime's UI (showing the exact project name and ID), then resolves the mapping by re-fetching. The dry-run (default without `--confirm`) shows exactly what would be created and any warnings — no API writes.
 
 ## Tool management
 
