@@ -243,7 +243,7 @@ pub fn extract_backup_statuses(backup: &Value) -> Vec<BackupStatus> {
     }
 
     let mut statuses: Vec<BackupStatus> = map.into_values().collect();
-    statuses.sort_by(|a, b| b.3.cmp(&a.3)); // Most used first
+    statuses.sort_by_key(|s| std::cmp::Reverse(s.3)); // Most used first
     statuses
 }
 
@@ -356,7 +356,10 @@ pub async fn resolve_status_gaps_interactive(
 
     println!("\n⚠ Status mapping needed:");
     for (_, label, stype, count) in gaps {
-        println!("  \"{}\" (type: {}, {} tickets) — not in this project", label, stype, count);
+        println!(
+            "  \"{}\" (type: {}, {} tickets) — not in this project",
+            label, stype, count
+        );
     }
     println!("\nThe Leantime API cannot create custom statuses.");
     println!("Open Leantime → project settings → Statuses");
@@ -575,13 +578,9 @@ pub async fn execute_restore(
 
     let gaps = detect_status_gaps(&backup_statuses, &project_statuses);
     if !gaps.is_empty() {
-        let mapping = resolve_status_gaps_interactive(
-            client,
-            &new_project_id,
-            &gaps,
-            &backup_statuses,
-        )
-        .await?;
+        let mapping =
+            resolve_status_gaps_interactive(client, &new_project_id, &gaps, &backup_statuses)
+                .await?;
 
         // Display the final mapping
         println!("\nFinal status mapping:");
@@ -599,7 +598,10 @@ pub async fn execute_restore(
                     .unwrap_or_else(|| format!("status {}", new_id));
 
                 if *new_id != *old_id {
-                    println!("  ✓ {} → {} = {} ({} tickets)", label, new_id, new_label, count);
+                    println!(
+                        "  ✓ {} → {} = {} ({} tickets)",
+                        label, new_id, new_label, count
+                    );
                 } else {
                     println!("  ✓ {} ({} tickets)", label, count);
                 }
@@ -700,14 +702,13 @@ pub async fn execute_restore(
             .unwrap_or("")
             .trim()
             .to_string();
-        let backup_status_label = if raw_status_label.is_empty()
-            || raw_status_label == "?"
-            || raw_status_label == "null"
-        {
-            backup_stype.clone()
-        } else {
-            raw_status_label
-        };
+        let backup_status_label =
+            if raw_status_label.is_empty() || raw_status_label == "?" || raw_status_label == "null"
+            {
+                backup_stype.clone()
+            } else {
+                raw_status_label
+            };
 
         if let Some(new_status) = status_mapping.get(&backup_status_label) {
             values["status"] = json!(new_status);
@@ -828,22 +829,65 @@ pub async fn execute_restore(
             continue;
         }
 
-        match client
+        // The entity object needs the ticket's actual type and headline —
+        // fetch the restored ticket (the backup's hardcodes won't work).
+        let ticket_info = match client
+            .call("tickets.getTicket", json!({"id": &new_ticket_id}))
+            .await
+        {
+            Ok(t) => json!({
+                "id": &new_ticket_id,
+                "type": t.get("type").cloned().unwrap_or(json!("task")),
+                "headline": t.get("headline").cloned().unwrap_or(json!("")),
+            }),
+            Err(_) => json!({
+                "id": &new_ticket_id,
+                "type": "task",
+                "headline": ""
+            }),
+        };
+
+        let add_result = client
             .call(
                 "comments.addComment",
                 json!({
                     "values": {"text": text, "father": 0},
                     "module": "ticket",
-                    "entityId": new_ticket_id,
-                    "entity": {"id": new_ticket_id, "type": "task", "headline": ""}
+                    "entityId": &new_ticket_id,
+                    "entity": ticket_info
                 }),
             )
-            .await
-        {
-            Ok(_) => comments_created += 1,
-            Err(e) => {
-                failures.push(format!("comment on ticket {}: {}", old_ticket_id, e));
+            .await;
+
+        // v3.7.3 bug: the comment row is inserted, then the notification build
+        // crashes. Verify the comment actually landed before surfacing an error.
+        if add_result.is_err() {
+            let landed = client
+                .call(
+                    "comments.getComments",
+                    json!({"module": "ticket", "entityId": &new_ticket_id}),
+                )
+                .await
+                .map(|r| {
+                    r.as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .any(|cm| cm.get("text").and_then(|t| t.as_str()) == Some(text))
+                        })
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if landed {
+                comments_created += 1;
+                continue;
             }
+            failures.push(format!(
+                "comment on ticket {}: {}",
+                old_ticket_id,
+                add_result.err().unwrap()
+            ));
+        } else {
+            comments_created += 1;
         }
     }
 

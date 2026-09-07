@@ -1,8 +1,8 @@
 //! Unit tests for the restore module: topological sort, milestone dedup,
 //! status extraction/mapping.
 
-use serde_json::json;
 use leantmcp::restore::*;
+use serde_json::json;
 
 fn ticket(id: &str, dep: &str, ttype: &str) -> serde_json::Value {
     json!({
@@ -18,10 +18,10 @@ fn ticket(id: &str, dep: &str, ttype: &str) -> serde_json::Value {
 #[test]
 fn topo_sort_parents_before_children() {
     let tickets = vec![
-        ticket("1", "", "task"),         // parent
-        ticket("2", "1", "task"),        // child of 1
-        ticket("3", "2", "task"),        // grandchild of 2
-        ticket("4", "", "task"),         // unrelated parent
+        ticket("1", "", "task"),  // parent
+        ticket("2", "1", "task"), // child of 1
+        ticket("3", "2", "task"), // grandchild of 2
+        ticket("4", "", "task"),  // unrelated parent
     ];
     let (sorted, warnings) = topological_sort(&tickets);
     assert!(warnings.is_empty());
@@ -46,7 +46,11 @@ fn topo_sort_orphan_becomes_top_level() {
     assert_eq!(sorted.len(), 2);
     assert!(!warnings.is_empty(), "should warn about orphan");
     assert!(warnings[0].contains("orphan"), "warning: {}", warnings[0]);
-    assert!(warnings[0].contains("999"), "warning should mention parent: {}", warnings[0]);
+    assert!(
+        warnings[0].contains("999"),
+        "warning should mention parent: {}",
+        warnings[0]
+    );
 }
 
 #[test]
@@ -58,7 +62,10 @@ fn topo_sort_circular_dependency() {
     ];
     let (sorted, warnings) = topological_sort(&tickets);
     assert_eq!(sorted.len(), 3, "all tickets should still be created");
-    assert!(!warnings.is_empty(), "should warn about circular dependency");
+    assert!(
+        !warnings.is_empty(),
+        "should warn about circular dependency"
+    );
 }
 
 #[test]
@@ -121,9 +128,7 @@ fn detect_gaps_finds_missing_labels() {
 
 #[test]
 fn detect_gaps_case_insensitive() {
-    let backup_statuses = vec![
-        (0, "NEW".to_string(), "NEW".to_string(), 5),
-    ];
+    let backup_statuses = vec![(0, "NEW".to_string(), "NEW".to_string(), 5)];
     let project_statuses = json!({
         "0": {"name": "new", "statusType": "NEW"},  // lowercase
     });
@@ -150,16 +155,17 @@ fn build_mapping_by_label() {
 
 #[test]
 fn build_mapping_no_match_returns_none() {
-    let backup_statuses = vec![
-        (5, "Blocked".to_string(), "BLOCKED".to_string(), 3),
-    ];
+    let backup_statuses = vec![(5, "Blocked".to_string(), "BLOCKED".to_string(), 3)];
     let project_statuses = json!({
         "0": {"name": "New"},
         "1": {"name": "In Progress"},
     });
 
     let mapping = build_status_mapping(&backup_statuses, &project_statuses);
-    assert!(mapping.get("Blocked").is_none(), "should not map if label not found");
+    assert!(
+        mapping.get("Blocked").is_none(),
+        "should not map if label not found"
+    );
 }
 
 // ---------------------------------------------------------------- status label normalization
@@ -178,10 +184,16 @@ fn extract_statuses_normalizes_placeholder_labels() {
 
     // The 3 tickets with status 0 should have label "DONE" (from statusType fallback)
     let done = statuses.iter().find(|(_, l, _, c)| l == "DONE" && *c == 3);
-    assert!(done.is_some(), "placeholder labels should be normalized to statusType, got: {:?}", statuses);
+    assert!(
+        done.is_some(),
+        "placeholder labels should be normalized to statusType, got: {:?}",
+        statuses
+    );
 
     // The ticket with "A Faire" should keep its actual label
-    let faire = statuses.iter().find(|(_, l, _, c)| l == "A Faire" && *c == 1);
+    let faire = statuses
+        .iter()
+        .find(|(_, l, _, c)| l == "A Faire" && *c == 1);
     assert!(faire.is_some(), "real labels should be preserved");
 }
 
@@ -202,37 +214,51 @@ fn build_mapping_status_type_fallback() {
     let mapping = build_status_mapping(&backup_statuses, &project_statuses);
 
     // Label "A Faire" doesn't match "New" but both have type NEW
-    assert_eq!(mapping.get("A Faire"), Some(&3), "should fallback to statusType NEW match");
-    assert_eq!(mapping.get("En cours"), Some(&4), "should fallback to statusType INPROGRESS match");
-    assert_eq!(mapping.get("DONE"), Some(&0), "should fallback to statusType DONE match");
+    assert_eq!(
+        mapping.get("A Faire"),
+        Some(&3),
+        "should fallback to statusType NEW match"
+    );
+    assert_eq!(
+        mapping.get("En cours"),
+        Some(&4),
+        "should fallback to statusType INPROGRESS match"
+    );
+    assert_eq!(
+        mapping.get("DONE"),
+        Some(&0),
+        "should fallback to statusType DONE match"
+    );
 }
 
 #[test]
 fn build_mapping_label_match_takes_priority_over_type() {
     // If label matches AND type matches, use the label match
-    let backup_statuses = vec![
-        (0, "Done".to_string(), "DONE".to_string(), 5),
-    ];
+    let backup_statuses = vec![(0, "Done".to_string(), "DONE".to_string(), 5)];
     let project_statuses = json!({
         "0": {"name": "Different Name", "statusType": "DONE"},
         "5": {"name": "Done", "statusType": "DONE"},
     });
 
-    let mapping = build_status_mapping(&backup_statuses, &type_fallback_project(&backup_statuses, &project_statuses));
+    let mapping = build_status_mapping(
+        &backup_statuses,
+        &type_fallback_project(&backup_statuses, &project_statuses),
+    );
     // "Done" matches status 5 by label, not status 0 by type
     assert_eq!(mapping.get("Done"), Some(&5));
 }
 
-fn type_fallback_project(_backup: &[BackupStatus], project: &serde_json::Value) -> serde_json::Value {
+fn type_fallback_project(
+    _backup: &[BackupStatus],
+    project: &serde_json::Value,
+) -> serde_json::Value {
     project.clone()
 }
 
 #[test]
 fn build_mapping_no_type_match_still_returns_none() {
     // Backup has a type that doesn't exist in the project at all
-    let backup_statuses = vec![
-        (7, "Blocked".to_string(), "BLOCKED".to_string(), 3),
-    ];
+    let backup_statuses = vec![(7, "Blocked".to_string(), "BLOCKED".to_string(), 3)];
     let project_statuses = json!({
         "0": {"name": "New", "statusType": "NEW"},
         "1": {"name": "In Progress", "statusType": "INPROGRESS"},
@@ -240,5 +266,8 @@ fn build_mapping_no_type_match_still_returns_none() {
     });
 
     let mapping = build_status_mapping(&backup_statuses, &project_statuses);
-    assert!(mapping.get("Blocked").is_none(), "no match → gap → interactive resolution needed");
+    assert!(
+        mapping.get("Blocked").is_none(),
+        "no match → gap → interactive resolution needed"
+    );
 }
