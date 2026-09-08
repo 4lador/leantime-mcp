@@ -32,6 +32,19 @@ export LEANTIME_E2E=local
 cargo test --test e2e_local -- --nocapture --test-threads=1
 ```
 
+| Suite | What it covers |
+|---|---|
+| `tests/markdown_test.rs` | Markdown → HTML: headings, lists, task lists, emphasis, multi-backtick code spans, links, escaping, CRLF |
+| `tests/markdown_golden_test.rs` | Byte-for-byte stable output pinned by a 73-case golden corpus (committed fixture (regenerate with scripts/generate-golden-corpus.ts)) |
+| `tests/config_test.rs` | Keyring round-trip (no newline, 0600), multi-instance isolation, masking, env resolution, instance-name traversal rejection |
+| `tests/harness_test.rs` | Config writers: merge preservation, 0600, codex idempotence, `{file:}` pointers, scope/instance/name options, deprecation warning |
+| `tests/client_test.rs` | Mocked HTTP (mockito): 429 adaptive retry (seconds + HTTP-date + cap), rate-limit discovery & calibration across calls, read 5xx retries, mutation 5xx ambiguity, chunked pagination, concurrent comments, exhaustion messages, RPC errors |
+| `tests/tools_test.rs` | Handlers via mockito: patch semantics, sprint full-field resend, id de-mangling, end-of-day timesheets, computed current sprint, destructive matrix, editorId validation, log_time validation, bulk paths, status label resolution, dry-run, guidance regression, enrichment |
+| `tests/key_rotate_test.rs` | Rotation choreography: happy path + relations copy, verification failure leaves keyring untouched, unknown key aborts, relation-copy failure warns, creation refusal aborts |
+| `tests/e2e_readonly.rs` | Opt-in (`LEANTIME_URL`+`LEANTIME_API_KEY`): projects non-vacuous, statuses shape, enrichment, milestones — with loud skips |
+| `tests/e2e/run.sh` | Binary-level smoke: MCP handshake, 42 tools, live API calls, assignment enforcement, doctor |
+| `tests/e2e_local.rs` | **Exhaustive e2e** — opt-in with `LEANTIME_E2E=local`: scratch project, full tool surface, scoping/field-wiping regressions, destructive gating (incl. deny), bulk cycles, capture-only cleanup |
+
 Expectations:
 
 - The exhaustive suite (`tests/e2e_local.rs`) is ported from the legacy TS `local.test.ts` (now on the `frozen-legacy-ts` branch) — this Rust suite is now the source of truth

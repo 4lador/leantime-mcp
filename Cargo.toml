@@ -10,11 +10,11 @@ readme = "README.md"
 keywords = ["leantime", "mcp", "project-management"]
 categories = ["command-line-utilities", "development-tools"]
 
-# Distribution-channel files stay out of the crate tarball. Cargo matches
-# glob patterns against full file paths (not gitignore directory rules),
-# hence the /** forms.
+# Distribution-channel files stay out of the crate tarball (the docs/*.md
+# guides ship with the crate so relative links work on crates.io; only the
+# hero image is excluded).
 exclude = [
-    "docs/**",
+    "docs/hero.png",
     ".github/**",
     "docker-compose.yml",
     "scripts/**",
