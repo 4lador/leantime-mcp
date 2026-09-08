@@ -119,7 +119,11 @@ async fn main() {
                 .arg(Arg::new("full").long("full").action(clap::ArgAction::SetTrue)
                     .help("Include per-ticket comments (slower: 1 API call per ticket)"))
                 .arg(Arg::new("list").long("list").action(clap::ArgAction::SetTrue)
-                    .help("List existing backups")),
+                    .help("List existing backups"))
+                .arg(Arg::new("prune").long("prune").action(clap::ArgAction::SetTrue)
+                    .help("Purge old backups per LEANTIME_MCP_BACKUP_RETENTION_DAYS (no new backup is taken)"))
+                .arg(Arg::new("output").long("output").value_name("DIR")
+                    .help("Write the backup to this directory instead of the keyring dir")),
         )
         .subcommand(
             Command::new("restore")
@@ -607,6 +611,32 @@ fn handle_setup(sub: &clap::ArgMatches) {
 // ---------------------------------------------------------------------------
 
 async fn handle_backup(args: &clap::ArgMatches) {
+    if args.get_flag("prune") {
+        let dir = leantmcp::config::secret_dir().join("backups");
+        let days = leantmcp::backup::retention_days();
+        if days <= 0 {
+            eprintln!("Retention is disabled (LEANTIME_MCP_BACKUP_RETENTION_DAYS unset or 0) — nothing to prune.");
+            return;
+        }
+        // No fresh backup in a manual prune: pass a dummy fresh path that
+        // cannot collide (nothing under this dir has that name).
+        let dummy = dir.join("\0-nonexistent-fresh");
+        match leantmcp::backup::purge_old_backups(&dir, &dummy, "", days) {
+            // prefix "" matches every project — manual prune is global
+            Ok((0, _)) => println!("Nothing older than {}d to prune.", days),
+            Ok((n, bytes)) => println!(
+                "✓ Pruned {} backup(s) older than {}d (freed {})",
+                n,
+                days,
+                leantmcp::backup::format_size(bytes)
+            ),
+            Err(e) => {
+                eprintln!("✗ {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if args.get_flag("list") {
         let backups = leantmcp::backup::list_backups();
         if backups.is_empty() {
@@ -682,7 +712,12 @@ async fn handle_backup(args: &clap::ArgMatches) {
         eprintln!("→ Full backup (includes comments — this may take a while at the instance's rate limit)...");
     }
 
-    match leantmcp::backup::backup_project(&mut c, &pid, &pname, full).await {
+    let out_dir: std::path::PathBuf = match args.get_one::<String>("output") {
+        Some(d) => d.into(),
+        None => leantmcp::config::secret_dir().join("backups"),
+    };
+    let result = leantmcp::backup::backup_project_to(&mut c, &pid, &pname, full, &out_dir).await;
+    match result {
         Ok(r) => {
             println!("✓ {}", r.summary());
             if full {

@@ -72,3 +72,60 @@ surfaces as an explicit `Ambiguous` error — the instance may or may not have
 applied the change, and a blind retry can duplicate it. On instances with
 low rate limits, large bulk batches may take several minutes — the tool
 descriptions inform agents of this.
+
+## Retention (optional)
+
+`LEANTIME_MCP_BACKUP_RETENTION_DAYS=N` (default 0 = keep everything — opt-in;
+an upgrade must not silently delete existing backups) enables automatic
+purge: after each successful backup is written and **validated** (re-read
+from disk and re-parsed), same-project backups older than N days are purged.
+The just-written backup is structurally protected from purge, and a
+validation failure (kill mid-write, full disk) skips the purge entirely —
+the previous generation stays. Purge issues are warnings, never errors:
+the backup itself already succeeded.
+
+```bash
+leantmcp backup --prune   # manual purge of everything older than the window
+```
+
+`leantmcp backup --output <dir>` writes to a specific directory (the MCP
+tool and the default CLI path use the keyring dir; the MCP tool exposes no
+path — agents do not choose where files land).
+
+## Optional: encrypt your backups (age)
+
+Backups contain project data (descriptions, comments, client names,
+possibly PII) in plaintext at rest. Mode 0600 protects against other local
+users. To protect copies that leave the machine (disk backups, home-dir
+sync, a stolen disk), encrypt with [age](https://age-encryption.org) —
+asymmetric, so the machine that produces backups holds only a public key:
+
+| Threat | 0600 | age-encrypted |
+|---|---|---|
+| Other local users | protected | protected |
+| Off-machine copies (Time Machine, home sync, stolen disk without the key) | not protected | protected |
+| Malware running as your user | not protected | not protected either — it reads files and key alike |
+
+```bash
+# Once — the SECRET key leaves the machine (password manager, other
+# device, paper). Only the public recipient stays.
+age-keygen -o /secure/location/backups.key
+age-keygen -y /secure/location/backups.key   # prints the public recipient
+
+# After a backup (or wrap in an alias) — public key only:
+age -r <recipient> -o backup.json.age backup.json && rm backup.json
+
+# Restore — bring the secret key back for the occasion:
+age -d -i /secure/location/backups.key backup.json.age > backup.json
+leantmcp restore backup.json
+```
+
+**Three rules, before you rely on this:**
+
+1. The secret key is the only way to restore — lose it and the encrypted
+   backups are unreadable
+2. Store it **off the machine** that holds the backups
+3. **Test a decrypt immediately** after setup, not the day you need it
+
+leantmcp has no key parameter anywhere — the binary cannot mishandle a
+key it never sees.
