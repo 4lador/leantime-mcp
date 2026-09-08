@@ -7,6 +7,8 @@
 </p>
 
 [![CI](https://github.com/4lador/leantime-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/4lador/leantime-mcp/actions/workflows/ci.yml)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-8A2BE2)](https://registry.modelcontextprotocol.io/v0.1/servers?search=leantime-mcp)
+[![crates.io](https://img.shields.io/crates/v/leantime-mcp)](https://crates.io/crates/leantime-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantime](https://leantime.io/), enabling LLM-powered tools (opencode, Claude Code, Claude Desktop, Cursor, Codex, or any MCP client) to interact with your Leantime projects.
@@ -15,34 +17,16 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 **Documentation**: [Migrating from v1.x](#migrating-from-v1x) · [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
-## What's new in v2.3.1
+## What's new in v2.5.0
 
-- **Dry-run by default (agent guidance, three-tier policy)**: mutation tool descriptions now instruct agents to execute directly when values are explicit or resolve unambiguously, to dry-run and confirm when they interpreted or chose values themselves, and to always dry-run bulk batches. Agents validate their own inferences without turning every trivial change into a permission loop.
+The v2.3.2 → v2.5.0 series (all shipped 2026-09-08):
 
-## What's new in v2.3.0
+- **Date-window pagination** (v2.4.0) — completeness fetches (backup, restore verification, project_context) are immune to the API's per-call limit: windows are bisected by modification date until everything fits, with id-deduplication so concurrent modifications can only produce duplicates, never losses.
+- **Concurrent `--full` backups** (v2.5.0) — `LEANTIME_MCP_BACKUP_CONCURRENCY` (1-8, default 1) fetches comments in parallel on generous instances; results stay in ticket order, the backup file is identical whatever the concurrency.
+- **Fixes** — silent truncation at the fetch limit (v2.3.2 — now configurable via `LEANTIME_MCP_FETCH_LIMIT` with explicit warnings), and the `status` label filter returning the wrong tickets (v2.3.3 — labels now resolve to their IDs).
+- **Installable via cargo** — `cargo install leantime-mcp`, and listed on the official [MCP Registry](https://registry.modelcontextprotocol.io).
 
-- **`dryRun: true`** on all mutation tools — validate without executing: same checks, `from → to` diffs on updates, per-item previews on bulk, zero API writes. See [Dry runs](#dry-runs).
-
-## What's new in v2.2.0
-
-- **`leantime_project_context`** — the full picture of a project in one call: progress, health counters (blocked / overdue / unassigned / open), current-or-upcoming sprint, milestone progress, ticket summary and recently modified items. Replaces 5-6 agent round-trips with a single response capped under 4 KB, timestamped `generatedAt`.
-
-## What's new in v2.1.0
-
-- **`leantmcp restore`** — rebuilds a backup into a NEW project (never merges with existing data): topological ordering (parents before subtasks), full ID remapping (milestones, sprints, tickets, comments), interactive status resolution and post-restore verification. See [Backup & recovery](#backup--recovery).
-
-## What's new in v2.0.0
-
-v2.0.0 is a complete rewrite in Rust (v1.x was TypeScript/Deno — see [Migrating from v1.x](#migrating-from-v1x)). Beyond the language change:
-
-- **Backup & recovery**: `leantmcp backup` and the `leantime_backup_project` MCP tool dump a project to a timestamped JSON file — agents can trigger a cheap backup before bulk modifications
-- **Tool management**: `leantmcp tools enable|disable` lets you hide tools from agents entirely (zero context-window cost), per instance profile, with groups (`destructive`, `readonly`, `write`, `all`)
-- **MCP tool annotations**: all 42 tools carry `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint` so clients can group, gate and cache them intelligently
-- **`--instance` flag**: `leantmcp backup --instance prod` — target any keyring profile on any command, no env prefix needed
-- **24h cap on `leantime_log_time`**: entries over 24 hours are rejected (a timesheet line targets ONE date — beyond 24h is impossible data, typically a hallucinated value)
-- **Protocol negotiation**: supports MCP revisions `2024-11-05` and `2025-06-18`, echoes the client's version when known
-- **Universal harness setup**: `setup <harness> [--scope global|project] [--instance PROFILE] [--name SERVER]` for opencode, Claude Code, Claude Desktop, Cursor and Codex — project-scoped configs are bare-command, git-committable, zero secrets
-- **Security hardening**: path-traversal guard on instance names, DoS caps on all server-controlled inputs (Retry-After ≤60s, responses ≤64MB, markdown ≤1MB, stdin ≤10MB), files created 0600 from the first byte, UTF-8-safe string handling throughout
+Earlier releases — dry-run validation, `leantime_project_context`, backup/restore, the Rust rewrite — see the [CHANGELOG](CHANGELOG.md).
 
 ## Migrating from v1.x
 
