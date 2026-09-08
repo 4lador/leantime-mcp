@@ -123,7 +123,7 @@ async fn main() {
         )
         .subcommand(
             Command::new("restore")
-                .about("Restore a backup file to a NEW project (never merges with existing data)")
+                .about("Restore a backup file into a new project (does not merge into existing data)")
                 .arg(Arg::new("file").index(1).required(true).value_name("FILE")
                     .help("Path to the backup JSON file"))
                 .arg(Arg::new("confirm").long("confirm").action(clap::ArgAction::SetTrue)

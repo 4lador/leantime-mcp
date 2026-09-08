@@ -172,7 +172,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool_with_annotations("leantime_create_project", format!("Create a new project. The details field is {}. Get a valid clientId with leantime_list_clients first.", md),
             vec![rs("name", "Project name"), rs("clientId", "Client ID (see leantime_list_clients)"), os("details", format!("Project details in {}", md)), on("hourBudget", "Hour budget"), on("dollarBudget", "Dollar budget")],
             vec!["name", "clientId"], Box::new(h_create_project), ToolAnnotations::write()),
-        tool_with_annotations("leantime_update_project", "Update a project. Only the provided fields are changed (patch API — other fields are never wiped).",
+        tool_with_annotations("leantime_update_project", "Update a project. Only the provided fields are changed (patch API — only provided fields change).",
             vec![rs("projectId", "The project ID"), os("name", "New project name"), os("details", format!("New details in {}", md)), on("hourBudget", "New hour budget"), on("dollarBudget", "New dollar budget")],
             vec!["projectId"], Box::new(h_update_project), ToolAnnotations::write()),
         tool("leantime_find_projects", "Search projects by name (fuzzy)",

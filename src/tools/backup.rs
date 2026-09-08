@@ -1,5 +1,5 @@
 //! `leantime_backup_project` — dump a project to a local JSON file.
-//! The response is a summary only (path + counts), never the data itself.
+//! The response is a summary only (path + counts), not the data itself.
 
 use std::future::Future;
 use std::pin::Pin;

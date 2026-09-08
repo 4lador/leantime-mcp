@@ -5,6 +5,37 @@ const MAX_429_RETRIES: usize = 5;
 const MAX_NETWORK_RETRIES: usize = 2;
 const DEFAULT_RATE_LIMIT_PER_MIN: u32 = 10;
 
+/// RPC methods that only read state — safe to retry on transient 5xx,
+/// because replaying them has no side effects. Default-deny: any method
+/// not listed here is treated as a mutation and is not retried on 5xx.
+const READ_METHODS: &[&str] = &[
+    "comments.getComments",
+    "projects.findProject",
+    "projects.getProject",
+    "projects.getProjectProgress",
+    "sprints.getAllSprints",
+    "sprints.getSprint",
+    "tickets.getAll",
+    "tickets.getAllOpenUserTickets",
+    "tickets.getAllSubtasks",
+    "tickets.getEffortLabels",
+    "tickets.getKanbanColumns",
+    "tickets.getPriorityLabels",
+    "tickets.getStatusLabels",
+    "tickets.getTicket",
+    "tickets.getTicketTypes",
+    "timesheets.getAll",
+    "users.getAll",
+];
+
+/// True when the request body carries a known read-only method.
+fn is_read_request(body: &Value) -> bool {
+    body.get("method")
+        .and_then(|m| m.as_str())
+        .and_then(|m| m.strip_prefix("leantime.rpc."))
+        .is_some_and(|m| READ_METHODS.contains(&m))
+}
+
 /// Items requested per `tickets.getAll` call on completeness paths
 /// (backup, restore verification, milestone progress, project_context).
 /// Deliberately high: these results are processed server-side and never
@@ -86,6 +117,14 @@ pub enum ApiError {
     /// Response body exceeded the size cap.
     #[error("Response too large ({0} bytes, max 64 MB)")]
     TooLarge(u64),
+    /// A transient 5xx arrived after a mutation was sent: the instance may
+    /// or may not have applied the change. Deliberately not retried — a
+    /// blind retry can duplicate it.
+    #[error("Ambiguous outcome: the instance returned HTTP {status} after the request was sent — the change may or may not have been applied. Verify the result (re-read the entity) before retrying; a blind retry can duplicate the change.")]
+    Ambiguous {
+        /// The transient 5xx status the instance returned.
+        status: u16,
+    },
     /// Defensive: the retry loop exited without returning.
     #[error("Unreachable state — please report this bug")]
     Unreachable,
@@ -220,6 +259,13 @@ async fn request_with_retries(
         match rpc_roundtrip(http, url, api_key, body).await {
             RoundTrip::Ok(v) => return Ok(v),
             RoundTrip::ServerError { status, reason } => {
+                // A 5xx after a mutation is ambiguous: the instance may have
+                // applied the change before the response was lost. Reads are
+                // retried transparently; mutations surface an explicit error
+                // instead of risking a duplicate.
+                if !is_read_request(body) {
+                    return Err(ApiError::Ambiguous { status });
+                }
                 if (network_retries as usize) < MAX_NETWORK_RETRIES {
                     network_retries += 1;
                     let delay = if network_retries == 1 { 500 } else { 1000 };

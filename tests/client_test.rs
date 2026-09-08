@@ -785,3 +785,97 @@ async fn comments_fetch_retries_429_per_ticket() {
     _m429.assert();
     _mok.assert();
 }
+
+// ---- 5xx ambiguity: reads retry transparently, mutations do not ----
+
+#[tokio::test]
+async fn mutation_on_504_is_not_retried_and_errors_ambiguously() {
+    let mut server = Server::new_async().await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(504)
+        .with_body("gateway timeout")
+        .expect(1) // exactly one request — a blind retry could duplicate the ticket
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "key");
+    let err = client
+        .call("tickets.addTicket", json!({"values": {"headline": "x"}}))
+        .await
+        .expect_err("504 on a mutation must error");
+    match err {
+        leantmcp::client::ApiError::Ambiguous { status } => assert_eq!(status, 504),
+        e => panic!("expected Ambiguous, got: {e:?}"),
+    }
+    m.assert();
+}
+
+#[tokio::test]
+async fn read_on_504_is_retried_transparently() {
+    let mut server = Server::new_async().await;
+    let _m1 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll"}).to_string(),
+        ))
+        .with_status(504)
+        .with_body("gateway timeout")
+        .expect(1)
+        .create_async()
+        .await;
+    let m2 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(json!({"jsonrpc": "2.0", "result": [], "id": 1}).to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "key");
+    let r = client.call("tickets.getAll", json!({})).await;
+    assert!(r.is_ok(), "{r:?}");
+    m2.assert();
+}
+
+#[tokio::test]
+async fn mutation_on_429_is_still_retried() {
+    // Rate limits are unambiguous rejections — mutations retry on them.
+    let mut server = Server::new_async().await;
+    let _m1 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(429)
+        .with_header("Retry-After", "0")
+        .with_body(r#"{"error": "Too many requests"}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    let m2 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(json!({"jsonrpc": "2.0", "result": [42], "id": 1}).to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "key");
+    let r = client
+        .call("tickets.addTicket", json!({"values": {"headline": "x"}}))
+        .await;
+    assert!(r.is_ok(), "{r:?}");
+    m2.assert();
+}

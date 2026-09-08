@@ -18,4 +18,6 @@ Why the rewrite? The v1.x binary embedded the Deno/V8 runtime:
 | Memory (idle) | ~50 MB | **~5 MB** (VmRSS) |
 | Runtime deps | Deno/V8 embedded | **none (rustls)** |
 
+Performance figures were measured on a Linux x86_64 dev machine (startup median over 100 spawns).
+
 Release history: [CHANGELOG.md](CHANGELOG.md) · Back to the [README](README.md).

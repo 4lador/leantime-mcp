@@ -43,15 +43,16 @@ Expectations:
 
 - No destructive MCP tool without the `confirm: true` gate
 - No secrets in code, tests, configs, or logs
-- Raw HTML in Markdown input is always escaped before reaching Leantime
+- Raw HTML in Markdown input is escaped before reaching Leantime
 - Instance names and any value joined into a path are validated (no traversal)
 
 ## Conventions
 
 - Conventional commits (`feat:`, `fix:`, `security:`, `test:`, `docs:`…)
-- Every user-facing change adds a line to the CHANGELOG under `## Unreleased`
+- User-facing changes are recorded in the CHANGELOG — entries are added with the release they ship in (dated `## vX.Y.Z` sections)
 - Public items carry doc comments (`#![warn(missing_docs)]` is on)
 - Error messages are actionable: say what failed AND how to fix it
+- Documentation describes mechanisms in the present tense
 
 ## Reporting issues
 

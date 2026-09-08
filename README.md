@@ -13,7 +13,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantime](https://leantime.io/), enabling LLM-powered tools (opencode, Claude Code, Claude Desktop, Cursor, Codex, or any MCP client) to interact with your Leantime projects.
 
-**~3 MB self-contained binary** (rustls — no system OpenSSL), **1.2 ms median startup** (measured over 100 spawns), **~5 MB idle memory** (VmRSS after handshake).
+**~3 MB self-contained binary** (rustls — no system OpenSSL), **~1.2 ms median startup** and **~5 MB idle memory** (VmRSS after handshake — measured on a Linux x86_64 dev machine, n=100 spawns).
 
 **Documentation**: [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [Migration from v1.x](migration-from-1.x.md) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
@@ -21,11 +21,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 - Full project-management coverage: projects, clients, tickets, subtasks, milestones, sprints, comments, time tracking and **bulk operations** (42 tools)
 - **`leantime_project_context`**: a composite first-call tool that hydrates full project context (progress, health, sprint, milestones, activity) in one round-trip — agents start reasoning instead of paging through lists
-- **Dry runs**: every mutation tool accepts `dryRun: true` — same validations, `from → to` diffs on updates, per-item previews on bulk, zero API writes. Agents are instructed to dry-run first on conversational-intent updates and inferred creates, and always on bulk batches
+- **Dry runs**: every mutation tool accepts `dryRun: true` — same validations, `from → to` diffs on updates, per-item previews on bulk, no write requests. Agents are instructed to dry-run first on conversational-intent updates and inferred creates, and on all bulk batches
 - **Backup & recovery**: `leantmcp backup [--full]` snapshots a project (plus `leantmcp restore` to rebuild it into a new project), and `leantime_backup_project` lets agents trigger a cheap backup before bulk modifications
-- **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — still zero secrets
-- **Automatic 429 retry**: adaptive backoff that discovers the instance's rate limit from response headers — agents never handle rate limiting
-- Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side, so everything is always properly rendered in Leantime's editor
+- **Multiple Leantime instances**: named profiles (`instance add`, `instance use`), one server per instance in any harness — the config holds no credentials
+- **Automatic 429 retry**: adaptive backoff that discovers the instance's rate limit from response headers — retries are transparent to agents; after 5 attempts the failure surfaces as an explicit error
+- Deterministic Markdown → rich HTML descriptions and comments: formatting is applied server-side — the documented subset (see below) converts consistently, so rendering does not depend on the client
 - Mandatory assignment on ticket/milestone creation: the server rejects calls that don't assign a user (or explicitly opt out)
 - Destructive operations gated behind explicit confirmation (`LEANTIME_MCP_DESTRUCTIVE_POLICY`)
 - v3.7.x API quirks handled server-side: scoping filters, session-less API keys, id mangling, array-wrapped ids
@@ -61,8 +61,8 @@ cargo build --release   # → target/release/leantmcp
 ## How it works
 
 - `leantmcp` is a **stdio MCP server**: your harness (opencode, Claude Code, Claude Desktop, Cursor, Codex…) spawns it at session start and stops it at session end. No daemon, no port, nothing runs in the background.
-- **Credentials never live in harness configs.** The binary resolves them at startup: environment variables first (per-run override), then the keyring — `~/.config/leantime/instances/<name>/` (`api-key` mode 0600, `instance-url`). One keyring, shared by every harness you use — .
-- That fallback is what makes every config below a **bare command with no secrets**: there is nothing sensitive to put in a config file in the first place.
+- **Credentials live in the local keyring** — generated harness configs hold a bare command. The binary resolves credentials at startup: environment variables first (per-run override — they can also be set in a config's env block, though the keyring is the intended path), then the keyring — `~/.config/leantime/instances/<name>/` (`api-key` mode 0600, `instance-url`). One keyring, shared by every harness you use.
+- That design is what lets the configs below stay **bare commands with no credentials** in them.
 
 ## Setup
 
@@ -93,7 +93,7 @@ Options:
 | Cursor | global | `./.cursor/mcp.json` (merge) | `~/.cursor/mcp.json` (merge) |
 | Codex | global | `./.codex/config.toml` (trusted projects only) | `~/.codex/config.toml` |
 
-All configs are **bare commands with no secrets**: the binary resolves credentials from `~/.config/leantime/instances/` at startup — there is nothing sensitive to put in a config file, which is what makes project-scoped files safe to commit.
+Generated configs are **bare commands containing no credentials**: the binary resolves credentials from `~/.config/leantime/instances/` at startup — project-scoped files contain no credentials and can be committed.
 
 The config a harness ends up with is simply:
 
@@ -140,7 +140,7 @@ leantmcp key rotate --instance staging   # rotates staging's key
 LEANTIME_INSTANCE=staging leantmcp key rotate
 ```
 
-In a harness config, declare one server per instance — still zero secrets:
+In a harness config, declare one server per instance — no credentials in the config:
 
 ```json
 {
@@ -169,7 +169,7 @@ All rich-text fields — **ticket and milestone descriptions, comments, and proj
 | `> quote` | Blockquote |
 | `---` | Horizontal rule |
 
-Raw HTML in descriptions is always escaped — it renders as literal text, never as markup.
+Raw HTML in descriptions is escaped before reaching Leantime — it renders as literal text.
 
 ## Assignment policy
 
@@ -200,7 +200,7 @@ The mutation tools (`leantime_create_ticket`, `leantime_update_ticket`, `leantim
 
 1. **Direct execution** when every value was explicitly given or resolves unambiguously — "passe le ticket #535 en Terminé" maps to one status, the agent writes and reports. No permission-asking loop for mechanical changes.
 2. **Dry-run then confirm** when the agent interpreted the request or chose values itself — "configure ce projet pour du dev agile" involves many agent-decided values, so it shows the diff/proposal first.
-3. **Bulk always dry-runs** — 50 writes deserve a per-item preview and an explicit go, even when requested explicitly.
+3. **Bulk: a dry-run first is mandated by the tool descriptions** — 50 writes deserve a per-item preview and an explicit go, even when requested explicitly.
 
 ## Available MCP Tools
 
@@ -224,7 +224,7 @@ The mutation tools (`leantime_create_ticket`, `leantime_update_ticket`, `leantim
 | `leantime_list_tickets` | List tickets with filters (status, milestone, sprint, user, type, search) |
 | `leantime_get_ticket` | Get ticket details |
 | `leantime_create_ticket` | Create a ticket (Markdown description, mandatory assignment, subtasks via dependingTicketId; `dryRun` supported) |
-| `leantime_update_ticket` | Update a ticket (patch — other fields are never wiped; `dryRun` supported) |
+| `leantime_update_ticket` | Update a ticket (patch — only provided fields change; `dryRun` supported) |
 | `leantime_delete_ticket` | Delete a ticket (confirm-gated) |
 | `leantime_list_subtasks` | List a ticket's subtasks |
 | `leantime_my_tasks` | Open tickets assigned to a user (default: the API key owner) |
@@ -307,11 +307,11 @@ leantmcp doctor       # health check: key file, permissions, config, live key
 ```
 
 - One secret in one place: the key file has mode 0600; the URL lives in a sibling file — changing instances updates every pointer-based config automatically
-- The key is never accepted as a command-line argument (shell history), never logged, and key commands are CLI-only — they are not exposed as MCP tools
+- The key is read from the keyring file or environment — it is not accepted as a command-line argument (shell history) and is not logged; key commands are CLI-only — they are not exposed as MCP tools
 
 ## Rate limit handling
 
-The MCP server transparently retries on `429 Too Many Requests` with **adaptive delays**: it discovers the instance's rate limit from the `X-RateLimit-Limit` header on the first 429, then paces requests accordingly (60s ÷ limit). When headers aren't available, it falls back to a conservative 6-second delay (Leantime's default 10 req/min). Up to 5 retries for rate limits, 2 for transient network errors (502/503/504). On instances with low rate limits, large bulk batches may take several minutes — the tool descriptions inform agents of this.
+The MCP server transparently retries on `429 Too Many Requests` with **adaptive delays**: it discovers the instance's rate limit from the `X-RateLimit-Limit` header on the first 429, then paces requests accordingly (60s ÷ limit). When headers aren't available, it falls back to a conservative 6-second delay (Leantime's default 10 req/min), with up to 5 retries. Reads also retry twice on transient server errors (502/503/504). Mutations retry on rate limits only: a transient 5xx after a mutation surfaces as an explicit `Ambiguous` error — the instance may or may not have applied the change, and a blind retry can duplicate it. On instances with low rate limits, large bulk batches may take several minutes — the tool descriptions inform agents of this.
 
 ## Backup & recovery
 
@@ -326,15 +326,15 @@ leantmcp restore backup.json --confirm  # execute the restore
 
 Backups land in `~/.config/leantime/backups/<project-name>-<timestamp>.json` (mode 0600). Fast mode captures milestones, tickets and sprints in 3 API calls. `--full` adds per-ticket comments at 1 call per ticket — on a rate-limited instance (~10 req/min), expect roughly 1 minute per 10 tickets. On instances with generous limits, `LEANTIME_MCP_BACKUP_CONCURRENCY=N` (1-8, default 1) fetches comments concurrently — results stay in ticket order so the backup file is identical either way.
 
-**Large projects**: completeness fetches (backup, restore verification, project_context) are immune to the API's per-call limit — a project larger than the limit (10 000 by default, override with `LEANTIME_MCP_FETCH_LIMIT`) is fetched completely via automatic date-window pagination: the window is bisected until every slice fits under the limit, results are deduplicated, and concurrent modifications can only produce duplicates, never losses. Normal projects pay exactly one request per fetch (the fast path). Only pathological cases (more tickets than the limit sharing one exact timestamp) still produce a `warnings` entry. `leantime_list_tickets` is separately capped at 500 results to protect the agent's context window, and says so in a note when the cap is hit.
+**Large projects**: completeness fetches (backup, restore verification, project_context) handle projects larger than the API's per-call limit (10 000 by default, override with `LEANTIME_MCP_FETCH_LIMIT`) via automatic date-window pagination: the window is bisected until every slice fits under the limit, and results are deduplicated. This is a best-effort snapshot, not an atomic one: tickets modified during the pass move to a later window and reappear as duplicates (deduplicated); tickets deleted during the pass are absent. Windows that cannot be fully resolved produce a `warnings` entry. Projects smaller than the limit pay one request per fetch (the fast path). `leantime_list_tickets` is separately capped at 500 results to protect the agent's context window, and says so in a note when the cap is hit.
 
 The MCP tool `leantime_backup_project` does the same fast backup and returns only a summary (path + counts), so agents can trigger it cheaply — e.g. before bulk modifications.
 
-**Restore** rebuilds a backup into a **NEW project** (never merges with existing data — zero risk of overwriting). Tickets are created in topological order (parents before subtasks), with all cross-references remapped (milestone, sprint, parent ticket). If the backup contains custom statuses that don't exist in the new project, the restore prompts interactively: it asks you to create the statuses in Leantime's UI (showing the exact project name and ID), then resolves the mapping by re-fetching. The dry-run (default without `--confirm`) shows exactly what would be created and any warnings — no API writes.
+**Restore** writes the backup into a **newly created project** — it does not merge into, or write to, an existing project. Tickets are created in topological order (parents before subtasks), with cross-references remapped (milestone, sprint, parent ticket). If the backup contains custom statuses that don't exist in the new project, the restore prompts interactively: it asks you to create the statuses in Leantime's UI (showing the project name and ID), then resolves the mapping by re-fetching. The dry-run (default without `--confirm`) shows what would be created and any warnings — it sends no write requests.
 
 ## Tool management
 
-Disable tools you don't need — they disappear from `tools/list` entirely (zero context-window cost), and calling a disabled tool returns an actionable error instead of a generic "unknown tool".
+Disable tools you don't need — they are omitted from `tools/list` (so they consume no context window), and calling a disabled tool is refused with an actionable error instead of a generic "unknown tool".
 
 ```bash
 leantmcp tools list                                    # all 42 tools with their status
@@ -358,7 +358,7 @@ Tool state is stored **per instance profile** (`~/.config/leantime/instances/<na
 - **Reduce context cost**: 42 tool descriptions ≈ 4K tokens; trimming to what you use saves tokens per conversation
 - **Safety**: disable destructive tools entirely — the agent can't even see they exist
 - **Simplicity**: fewer tools = faster agent decisions, less confusion
-- **Read-only mode**: `--preset readonly` is ideal for demonstrations or giving someone view-only access
+- **Read-only mode**: the two commands above (`tools disable all` + `tools enable readonly`) suit demonstrations or view-only access
 
 ## Getting your Leantime API key
 
@@ -390,16 +390,16 @@ export LEANTIME_API_KEY="$(bash scripts/local-instance-bootstrap.sh | tail -1)"
 
 | Suite | What it covers |
 |---|---|
-| `tests/markdown_test.rs` (24) | Markdown → HTML: headings, lists, task lists, emphasis, multi-backtick code spans, links, escaping, CRLF |
-| `tests/markdown_golden_test.rs` (1) | Byte-for-byte stable output pinned by a 73-case golden corpus (committed fixture (regenerate with scripts/generate-golden-corpus.ts)) |
-| `tests/config_test.rs` (14) | Keyring round-trip (no newline, 0600), multi-instance isolation, masking, env resolution, instance-name traversal rejection |
-| `tests/harness_test.rs` (15) | Config writers: merge preservation, 0600, codex idempotence, `{file:}` pointers, scope/instance/name options, deprecation warning |
-| `tests/client_test.rs` (14) | Mocked HTTP (mockito): 429 adaptive retry (seconds + HTTP-date + cap), rate-limit discovery & calibration across calls, 503×2 retries, 502 exhaustion, exhaustion messages byte-parity, RPC errors + `data` separator |
-| `tests/tools_test.rs` (38) | Handlers via mockito: patch semantics, sprint full-field resend, id de-mangling, end-of-day timesheets, computed current sprint, destructive matrix (ask/deny/allow/invalid + 4-tool sweep), editorId validation, log_time validation (24h daily cap), bulk caps + happy/partial paths, comment crash recovery, enrichment |
-| `tests/key_rotate_test.rs` (6) | Rotation choreography: happy path + relations copy, verification failure leaves keyring untouched, unknown key aborts, relation-copy failure warns, creation refusal aborts |
-| `tests/e2e_readonly.rs` (1) | Opt-in (`LEANTIME_URL`+`LEANTIME_API_KEY`): projects non-vacuous, statuses shape, enrichment, milestones — with loud skips |
-| `tests/e2e/run.sh` (7 checks) | Binary-level smoke: MCP handshake, 42 tools, live API calls, assignment enforcement, doctor |
-| `tests/e2e_local.rs` (1, 8 sections) | **Exhaustive e2e** — opt-in with `LEANTIME_E2E=local`: scratch project, full tool surface, scoping/field-wiping regressions, destructive gating (incl. deny), bulk cycles, capture-only cleanup |
+| `tests/markdown_test.rs` | Markdown → HTML: headings, lists, task lists, emphasis, multi-backtick code spans, links, escaping, CRLF |
+| `tests/markdown_golden_test.rs` | Byte-for-byte stable output pinned by a 73-case golden corpus (committed fixture (regenerate with scripts/generate-golden-corpus.ts)) |
+| `tests/config_test.rs` | Keyring round-trip (no newline, 0600), multi-instance isolation, masking, env resolution, instance-name traversal rejection |
+| `tests/harness_test.rs` | Config writers: merge preservation, 0600, codex idempotence, `{file:}` pointers, scope/instance/name options, deprecation warning |
+| `tests/client_test.rs` | Mocked HTTP (mockito): 429 adaptive retry (seconds + HTTP-date + cap), rate-limit discovery & calibration across calls, read 5xx retries, mutation 5xx ambiguity, chunked pagination, concurrent comments, exhaustion messages, RPC errors |
+| `tests/tools_test.rs` | Handlers via mockito: patch semantics, sprint full-field resend, id de-mangling, end-of-day timesheets, computed current sprint, destructive matrix, editorId validation, log_time validation, bulk paths, status label resolution, dry-run, guidance regression, enrichment |
+| `tests/key_rotate_test.rs` | Rotation choreography: happy path + relations copy, verification failure leaves keyring untouched, unknown key aborts, relation-copy failure warns, creation refusal aborts |
+| `tests/e2e_readonly.rs` | Opt-in (`LEANTIME_URL`+`LEANTIME_API_KEY`): projects non-vacuous, statuses shape, enrichment, milestones — with loud skips |
+| `tests/e2e/run.sh` | Binary-level smoke: MCP handshake, 42 tools, live API calls, assignment enforcement, doctor |
+| `tests/e2e_local.rs` | **Exhaustive e2e** — opt-in with `LEANTIME_E2E=local`: scratch project, full tool surface, scoping/field-wiping regressions, destructive gating (incl. deny), bulk cycles, capture-only cleanup |
 
 ```bash
 # exhaustive e2e against the local docker instance (~9 min at 10 req/min):
@@ -418,3 +418,5 @@ cargo build --release
 ## License
 
 [MIT](LICENSE)
+
+Leantime is a product of its respective owners. This project is an independent, unofficial integration and is not affiliated with or endorsed by the Leantime team.

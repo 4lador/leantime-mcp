@@ -1,5 +1,6 @@
 //! Project restore — rebuilds a backup `leantime-mcp-backup/1` into a NEW
-//! project on a Leantime instance. Never merges with existing data.
+//! project on a Leantime instance — writes into a new project, does not
+//! merge into existing data.
 //!
 //! Pipeline: validate → preflight → dry-run (default) → confirm →
 //! sequential restore (topological order) → journal → verify.

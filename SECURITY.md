@@ -30,9 +30,9 @@ Also see the [RustSec advisories database](https://rustsec.org/advisories/) — 
 
 ## Security-relevant design
 
-- Raw HTML in Markdown input is always escaped — it cannot inject arbitrary markup into Leantime's rich-text fields. Link URLs are allowlisted (http/https/mailto).
-- The API key lives in a single local keyring file (created mode 0600 on POSIX — no plaintext window; user-profile ACLs on Windows). It is never logged, never echoed in full, and never included in tool responses.
-- Credentials never appear in harness configs: opencode configs use `{file:...}` pointers (a plaintext fallback exists for bootstrapping but is deprecated and warns).
+- Raw HTML in Markdown input is escaped before reaching Leantime — it is not injected as markup into rich-text fields. Link URLs are allowlisted (http/https/mailto).
+- The API key lives in a single local keyring file (created mode 0600 on POSIX — no plaintext window; user-profile ACLs on Windows). It is not logged, not echoed in full, and not included in tool responses.
+- Generated harness configs contain no credentials: opencode configs use `{file:...}` pointers (a plaintext fallback exists for bootstrapping but is deprecated and warns; environment-variable overrides remain available and are documented in the README).
 - Destructive tools require an explicit `confirm: true` and respect `LEANTIME_MCP_DESTRUCTIVE_POLICY` (`ask`/`deny`/`allow`).
 - Instance names are validated before being joined into filesystem paths; file writes are created private-by-design and the keyring directory chain is 0700.
 - Server-controlled inputs are bounded: Retry-After capped at 60s, HTTP responses at 64 MB (enforced while streaming, including chunked bodies), markdown input at 1 MB, list nesting at depth 32. Stdin lines over 10 MB are rejected — a policy against protocol confusion (the line is buffered before rejection; the peer is the local, trusted harness).
