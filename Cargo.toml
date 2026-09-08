@@ -7,7 +7,7 @@ description = "Unofficial Model Context Protocol server for Leantime: 42 agent-f
 license = "MIT"
 repository = "https://github.com/4lador/leantime-mcp"
 readme = "README.md"
-keywords = ["leantime", "mcp", "model-context-protocol", "project-management"]
+keywords = ["leantime", "mcp", "project-management"]
 categories = ["command-line-utilities", "development-tools"]
 
 # Distribution-channel files stay out of the crate tarball. Cargo matches
