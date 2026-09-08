@@ -160,5 +160,13 @@ pub fn create_registry() -> Vec<Tool> {
     tools.extend(bulk::tools());
     tools.extend(backup::tools());
     tools.extend(project_context::tools());
+    // Execution profile (LEANTIME_MCP_PROFILE=readonly): write and
+    // destructive handlers are REMOVED at construction — the tools do not
+    // exist in this process, not merely hidden from tools/list. Orthogonal
+    // to per-instance tools.json (which can only remove more, never add).
+    let profile = std::env::var("LEANTIME_MCP_PROFILE").unwrap_or_default();
+    if profile.trim().eq_ignore_ascii_case("readonly") {
+        tools.retain(|t| t.annotations.read_only);
+    }
     tools
 }
