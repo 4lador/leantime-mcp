@@ -203,3 +203,79 @@ jobs:
           files: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
+
+  # Publishes metadata after the binaries: crates.io (trusted publishing,
+  # keyless OIDC — configured on the crate's Trusted Publisher page for
+  # workflow ci.yml) then the MCP Registry (github-oidc, keyless).
+  # Runs only on version tags, after every other job — including release —
+  # so a failed publish never leaves half-built artifacts behind.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, smoke-windows, smoke-macos, msrv, local-e2e, release]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC for crates.io trusted publishing + registry
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version consistency guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Tag version: $VERSION"
+          # Cargo.toml must match the tag
+          CARGO_VER=$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          if [ "$CARGO_VER" != "$VERSION" ]; then
+            echo "::error::Cargo.toml ($CARGO_VER) != tag ($VERSION) — bump versions before tagging"
+            exit 1
+          fi
+          # server.json (top-level + package entry) must match the tag
+          SERVER_VER=$(jq -r '.version' server.json)
+          PKG_VER=$(jq -r '.packages[0].version' server.json)
+          if [ "$SERVER_VER" != "$VERSION" ] || [ "$PKG_VER" != "$VERSION" ]; then
+            echo "::error::server.json (top=$SERVER_VER, package=$PKG_VER) != tag ($VERSION)"
+            exit 1
+          fi
+          echo "Versions consistent: $VERSION"
+      - name: Idempotency guard (crates.io)
+        id: already_published
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -A "leantime-mcp-ci" "https://crates.io/api/v1/crates/leantime-mcp/$VERSION")
+          if [ "$CODE" = "200" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "leantime-mcp@$VERSION already on crates.io — skipping cargo publish"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.already_published.outputs.skip != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.already_published.outputs.skip != 'true'
+      - name: Publish crate to crates.io (keyless)
+        if: steps.already_published.outputs.skip != 'true'
+        run: cargo publish --locked
+      - name: Install mcp-publisher
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Authenticate to MCP Registry (OIDC, keyless)
+        run: ./mcp-publisher login github-oidc
+      - name: Publish server.json to MCP Registry
+        run: ./mcp-publisher publish
+      - name: Verify registry listing
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          for i in 1 2 3 4 5; do
+            if curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=leantime-mcp" \
+              | jq -e --arg v "$VERSION" '[.servers[].server.version] | index($v)' >/dev/null; then
+              echo "Registry lists $VERSION ✓"
+              exit 0
+            fi
+            echo "Version not visible yet (attempt $i) — waiting 20s…"
+            sleep 20
+          done
+          echo "::warning::Registry listing did not show $VERSION within 100s (indexing lag?) — verify manually"
