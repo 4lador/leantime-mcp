@@ -411,3 +411,203 @@ async fn retry_exhaustion_includes_waited_clause_when_delayed() {
     );
     m.assert();
 }
+
+// ---- chunked completeness fetch (date-window bisection) ----
+
+/// LEANTIME_MCP_FETCH_LIMIT is process-global: tests that set it hold this
+/// lock so parallel tests in this binary can't race them.
+static FETCH_LIMIT_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+fn rpc_items(ids: &[i64]) -> String {
+    let items: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|i| json!({"id": i, "type": "task", "headline": format!("t{}", i)}))
+        .collect();
+    json!({"jsonrpc": "2.0", "result": items, "id": 1}).to_string()
+}
+
+#[tokio::test]
+async fn chunked_fast_path_is_a_single_call() {
+    let _guard = FETCH_LIMIT_LOCK.lock().await;
+    std::env::remove_var("LEANTIME_MCP_FETCH_LIMIT");
+    let mut server = Server::new_async().await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "15"}, "limit": 10000
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[1, 2, 3]))
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "test-key");
+    let (items, warnings) = client
+        .get_all_tickets_chunked("15", json!({}))
+        .await
+        .expect("fast path should succeed");
+    assert_eq!(items.len(), 3);
+    assert!(warnings.is_empty());
+    m.assert(); // exactly one request — no windowed calls below the limit
+}
+
+#[tokio::test]
+async fn chunked_bisection_splits_full_windows_and_dedups() {
+    let _guard = FETCH_LIMIT_LOCK.lock().await;
+    std::env::set_var("LEANTIME_MCP_FETCH_LIMIT", "3");
+    let mut server = Server::new_async().await;
+
+    // Probe (no dates) — created FIRST so windowed mocks take precedence
+    // for windowed requests (mockito: newest matching mock wins).
+    let probe = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getAll", "params": {
+                "searchCriteria": {"currentProject": "15"}, "limit": 3
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[1, 2, 3])) // exactly the limit → chunking
+        .create_async()
+        .await;
+
+    use chrono::NaiveDate;
+    let from = NaiveDate::from_ymd_opt(2026, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let to = NaiveDate::from_ymd_opt(2026, 1, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    // Root window widened by ±1s. A full window is NOT merged: its items
+    // are re-fetched by the halves (the date ranges partition the space),
+    // so a realistic mock returns a subset that the halves also return.
+    let _root = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {
+                "currentProject": "15",
+                "dateFrom": "2025-12-31 23:59:59",
+                "dateTo": "2026-01-31 00:00:01"
+            }, "limit": 3}})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[1, 2, 3])) // full again → split at 2026-01-16
+        .create_async()
+        .await;
+    // Right half [2026-01-16, 2026-01-31] widened
+    let _right = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {
+                "currentProject": "15",
+                "dateFrom": "2026-01-15 23:59:59",
+                "dateTo": "2026-01-31 00:00:01"
+            }, "limit": 3}})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[3, 4])) // under the limit → leaf
+        .create_async()
+        .await;
+    // Left half [2026-01-01, 2026-01-16] widened — id 4 also returned by
+    // the right half: the ±1s overlap must dedup, never lose it
+    let _left = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {
+                "currentProject": "15",
+                "dateFrom": "2025-12-31 23:59:59",
+                "dateTo": "2026-01-16 00:00:01"
+            }, "limit": 3}})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[4, 5])) // under the limit → leaf
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "test-key");
+    let (items, warnings) = client
+        .get_all_tickets_chunked_in("15", json!({}), from, to, 32)
+        .await
+        .expect("chunked fetch should succeed");
+    std::env::remove_var("LEANTIME_MCP_FETCH_LIMIT");
+
+    let mut ids: Vec<i64> = items
+        .iter()
+        .filter_map(|i| i.get("id").and_then(|v| v.as_i64()))
+        .collect();
+    ids.sort();
+    // probe {1,2,3} ∪ right {3,4} ∪ left {4,5} — deduped
+    assert_eq!(ids, vec![1, 2, 3, 4, 5], "{:?}", items);
+    assert!(warnings.is_empty());
+    probe.assert();
+    _root.assert();
+    _right.assert();
+    _left.assert();
+}
+
+#[tokio::test]
+async fn chunked_depth_cap_emits_warning() {
+    let _guard = FETCH_LIMIT_LOCK.lock().await;
+    std::env::set_var("LEANTIME_MCP_FETCH_LIMIT", "3");
+    let mut server = Server::new_async().await;
+    let _probe = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {"currentProject": "15"}, "limit": 3}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[1, 2, 3]))
+        .create_async()
+        .await;
+    let window = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"searchCriteria": {
+                "dateFrom": "2025-12-31 23:59:59",
+                "dateTo": "2026-01-31 00:00:01"
+            }}})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_items(&[1, 2, 3])) // full at depth 0 = max_depth → cap
+        .create_async()
+        .await;
+
+    use chrono::NaiveDate;
+    let from = NaiveDate::from_ymd_opt(2026, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let to = NaiveDate::from_ymd_opt(2026, 1, 31)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let mut client = LeantimeClient::new(&server.url(), "test-key");
+    let (items, warnings) = client
+        .get_all_tickets_chunked_in("15", json!({}), from, to, 0)
+        .await
+        .expect("should succeed with warnings");
+    std::env::remove_var("LEANTIME_MCP_FETCH_LIMIT");
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("depth cap"), "{:?}", warnings);
+    window.assert();
+}

@@ -101,17 +101,13 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
             });
 
         // 3. All tickets (Leantime stores milestones in the same table —
-        //    they arrive here with type "milestone").
-        let mut tickets = match c
-            .call(
-                "tickets.getAll",
-                json!({"searchCriteria": {"currentProject": pid}, "limit": crate::client::fetch_limit()}),
-            )
-            .await
-        {
-            Ok(t) => t.as_array().cloned().unwrap_or_default(),
-            Err(e) => return error_result(&e.to_string()),
-        };
+        //    they arrive here with type "milestone"). Chunked completeness
+        //    fetch: 1 call on the fast path, bisection beyond the API limit.
+        let (mut tickets, mut chunk_warnings) =
+            match c.get_all_tickets_chunked(pid, json!({})).await {
+                Ok(t) => t,
+                Err(e) => return error_result(&e.to_string()),
+            };
 
         // 6. Status labels (cached permanently per project after first call).
         let sm = c.get_status_map(pid).await.unwrap_or(json!({}));
@@ -232,15 +228,11 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
         let mut milestones_json: Vec<Value> = Vec::new();
         let mut milestones_note: Option<String> = None;
         if include_milestones {
-            let mut milestone_list = c
-                .call(
-                    "tickets.getAll",
-                    json!({"searchCriteria": {"currentProject": pid, "type": "milestone"}, "limit": crate::client::fetch_limit()}),
-                )
+            let (mut milestone_list, ms_chunk_warnings) = c
+                .get_all_tickets_chunked(pid, json!({"type": "milestone"}))
                 .await
-                .ok()
-                .map(|m| m.as_array().cloned().unwrap_or_default())
                 .unwrap_or_default();
+            chunk_warnings.extend(ms_chunk_warnings);
             c.enrich_with_statuses(&mut milestone_list, &sm);
 
             let mut by_id: Vec<(i64, Value)> = milestone_list
@@ -381,6 +373,9 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
             "generatedAt".into(),
             json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
         );
+        if !chunk_warnings.is_empty() {
+            out.insert("warnings".into(), json!(chunk_warnings));
+        }
         out.insert(
             "project".into(),
             json!({

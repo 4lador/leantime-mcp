@@ -35,6 +35,16 @@ pub struct LeantimeClient {
     user_cache: Option<(Vec<Value>, std::time::Instant)>,
 }
 
+/// Stable identity key for a ticket across fetches — ids arrive as strings
+/// or numbers depending on the API version.
+fn id_key(item: &Value) -> String {
+    match item.get("id") {
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
 /// Error returned by the Leantime JSON-RPC client. Every variant carries an
 /// actionable, human-readable message (surfaced verbatim to tool callers).
 #[derive(Debug, thiserror::Error)]
@@ -344,5 +354,148 @@ impl LeantimeClient {
             self.enrich_with_statuses(&mut vec, &sm);
             *item = vec.remove(0);
         }
+    }
+
+    /// Completeness fetch of every ticket in a project (optionally filtered
+    /// by extra searchCriteria such as `{"type": "milestone"}`), immune to
+    /// the API's per-call limit. Fast path: a single unwindowed call —
+    /// projects smaller than [`fetch_limit`] cost exactly one request (same
+    /// as before chunking existed). When that call comes back full, the
+    /// fetch falls back to date-window bisection over [1970, now + 2 days].
+    /// Returns `(deduplicated items, warnings)`.
+    pub async fn get_all_tickets_chunked(
+        &mut self,
+        project_id: &str,
+        extra_criteria: Value,
+    ) -> Result<(Vec<Value>, Vec<String>), ApiError> {
+        let to = chrono::Local::now()
+            .naive_local()
+            .checked_add_signed(chrono::Duration::days(2))
+            .unwrap_or_else(|| {
+                chrono::NaiveDate::from_ymd_opt(2100, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+            });
+        let from = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        self.get_all_tickets_chunked_in(project_id, extra_criteria, from, to, 32)
+            .await
+    }
+
+    /// Injectable core of [`get_all_tickets_chunked`] — fixed range and
+    /// depth cap keep the bisection windows deterministic for tests.
+    pub async fn get_all_tickets_chunked_in(
+        &mut self,
+        project_id: &str,
+        extra_criteria: Value,
+        from: chrono::NaiveDateTime,
+        to: chrono::NaiveDateTime,
+        max_depth: u32,
+    ) -> Result<(Vec<Value>, Vec<String>), ApiError> {
+        let limit = fetch_limit();
+        let mut criteria = serde_json::json!({"currentProject": project_id});
+        if let (Some(base), Some(ext)) = (criteria.as_object_mut(), extra_criteria.as_object()) {
+            for (k, v) in ext {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Fast path: one unwindowed call. Below the limit the result is
+        // complete by definition — zero extra requests for normal projects.
+        let probe = self
+            .call(
+                "tickets.getAll",
+                serde_json::json!({"searchCriteria": criteria.clone(), "limit": limit}),
+            )
+            .await?;
+        // Order-preserving dedup: first occurrence wins, output order stays
+        // the fetch order (deterministic for a given dataset).
+        let mut out: Vec<Value> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for item in probe.as_array().cloned().unwrap_or_default() {
+            if seen.insert(id_key(&item)) {
+                out.push(item);
+            }
+        }
+        if out.len() < limit {
+            return Ok((out, Vec::new()));
+        }
+
+        // Truncation suspected — bisect [from, to] by modification date.
+        // Ascending-order invariants that make this loss-free:
+        // - a ticket's date only moves forward, so a ticket modified during
+        //   the fetch reappears in a LATER window → duplicate, never loss
+        //   (the id-keyed map absorbs duplicates);
+        // - each call widens its window by ±1s because the API compares
+        //   strictly (`date > from AND date < to`): without the overlap, a
+        //   ticket exactly on a split boundary would fall in NO window.
+        let mut warnings = Vec::new();
+        let fmt = |d: chrono::NaiveDateTime| d.format("%Y-%m-%d %H:%M:%S").to_string();
+        let mut stack: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime, u32)> =
+            vec![(from, to, 0)];
+        while let Some((w_from, w_to, depth)) = stack.pop() {
+            let lo = w_from - chrono::Duration::seconds(1);
+            let hi = w_to + chrono::Duration::seconds(1);
+            let mut sc = criteria.clone();
+            sc["dateFrom"] = serde_json::json!(fmt(lo));
+            sc["dateTo"] = serde_json::json!(fmt(hi));
+            let batch = self
+                .call(
+                    "tickets.getAll",
+                    serde_json::json!({"searchCriteria": sc, "limit": limit}),
+                )
+                .await?;
+            let items = batch.as_array().cloned().unwrap_or_default();
+            if items.len() < limit {
+                for item in items {
+                    if seen.insert(id_key(&item)) {
+                        out.push(item);
+                    }
+                }
+                continue;
+            }
+            if depth >= max_depth {
+                for item in items {
+                    if seen.insert(id_key(&item)) {
+                        out.push(item);
+                    }
+                }
+                warnings.push(format!(
+                    "pagination depth cap reached for window [{} → {}] — tickets beyond the API limit inside this window may be missing (bulk import sharing one timestamp?); raise LEANTIME_MCP_FETCH_LIMIT",
+                    fmt(w_from),
+                    fmt(w_to)
+                ));
+                continue;
+            }
+            match w_to
+                .signed_duration_since(w_from)
+                .num_seconds()
+                .checked_div(2)
+            {
+                Some(half) if half > 0 => {
+                    if let Some(mid) = w_from.checked_add_signed(chrono::Duration::seconds(half)) {
+                        stack.push((w_from, mid, depth + 1));
+                        stack.push((mid, w_to, depth + 1));
+                        continue;
+                    }
+                    warnings.push(format!(
+                        "pagination window arithmetic failed at [{} → {}] — this slice may be incomplete",
+                        fmt(w_from),
+                        fmt(w_to)
+                    ));
+                }
+                _ => {
+                    warnings.push(format!(
+                        "pagination depth cap reached for window [{} → {}] — tickets beyond the API limit inside this window may be missing; raise LEANTIME_MCP_FETCH_LIMIT",
+                        fmt(w_from),
+                        fmt(w_to)
+                    ));
+                }
+            }
+        }
+        Ok((out, warnings))
     }
 }

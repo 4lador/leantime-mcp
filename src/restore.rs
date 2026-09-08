@@ -906,23 +906,16 @@ pub async fn execute_restore(
         }
     }
 
-    // 6. Verify
-    let verify_limit = crate::client::fetch_limit();
-    let verify = client
-        .call(
-            "tickets.getAll",
-            json!({"searchCriteria": {"currentProject": &new_project_id}, "limit": verify_limit}),
-        )
-        .await;
-    if let Ok(verify_result) = verify {
-        let actual = verify_result.as_array().map(|a| a.len()).unwrap_or(0);
+    // 6. Verify — chunked completeness fetch (immune to the API limit).
+    // Verification stays best-effort: a fetch failure was skipped before
+    // chunking and still is.
+    if let Ok((verify_items, verify_warnings)) = client
+        .get_all_tickets_chunked(&new_project_id, json!({}))
+        .await
+    {
+        let actual = verify_items.len();
         let expected = tickets_raw.len();
-        if actual >= verify_limit {
-            warnings.push(format!(
-                "verification: fetched exactly {} tickets (API limit) — the count check below may be unreliable; raise LEANTIME_MCP_FETCH_LIMIT and re-verify",
-                verify_limit
-            ));
-        }
+        warnings.extend(verify_warnings);
         if actual < expected {
             warnings.push(format!(
                 "verification: expected {} tickets, found {} — some creations may have failed silently",

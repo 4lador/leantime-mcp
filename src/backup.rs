@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use crate::client::{fetch_limit, LeantimeClient};
+use crate::client::LeantimeClient;
 use crate::config;
 
 /// Result of a backup run — a summary, never the data itself (token-cheap
@@ -49,19 +49,6 @@ impl BackupResult {
     }
 }
 
-/// Warning when a fetch returned exactly the requested limit — items beyond
-/// it were NOT captured (the API has no offset pagination).
-pub(crate) fn limit_warning(what: &str, count: usize, limit: usize) -> Option<String> {
-    if count >= limit && limit > 0 {
-        Some(format!(
-            "{}: fetched exactly {} items (API limit) — items beyond this were NOT captured; raise LEANTIME_MCP_FETCH_LIMIT and re-run for a complete backup",
-            what, limit
-        ))
-    } else {
-        None
-    }
-}
-
 fn format_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
@@ -96,24 +83,19 @@ pub async fn backup_project(
     project_name: &str,
     full: bool,
 ) -> Result<BackupResult, String> {
-    // 1. Milestones
-    let limit = fetch_limit();
-    let milestones = client
-        .call(
-            "tickets.getAll",
-            json!({"searchCriteria": {"currentProject": project_id, "type": "milestone"}, "limit": limit}),
-        )
+    // 1. Milestones — chunked completeness fetch (fast path: 1 call; falls
+    //    back to date-window bisection if the API limit is hit).
+    let (milestone_list, mut warnings) = client
+        .get_all_tickets_chunked(project_id, json!({"type": "milestone"}))
         .await
         .map_err(|e| format!("Could not fetch milestones: {}", e))?;
 
     // 2. All tickets (including milestones — Leantime stores them together)
-    let tickets = client
-        .call(
-            "tickets.getAll",
-            json!({"searchCriteria": {"currentProject": project_id}, "limit": limit}),
-        )
+    let (ticket_list, ticket_warnings) = client
+        .get_all_tickets_chunked(project_id, json!({}))
         .await
         .map_err(|e| format!("Could not fetch tickets: {}", e))?;
+    warnings.extend(ticket_warnings);
 
     // 3. Sprints
     let sprints = client
@@ -121,19 +103,7 @@ pub async fn backup_project(
         .await
         .map_err(|e| format!("Could not fetch sprints: {}", e))?;
 
-    let milestone_list = milestones.as_array().cloned().unwrap_or_default();
-    let ticket_list = tickets.as_array().cloned().unwrap_or_default();
     let sprint_list = sprints.as_array().cloned().unwrap_or_default();
-
-    // Truncation detection: a fetch that returned exactly the limit means
-    // items beyond it were silently dropped by the API.
-    let mut warnings = Vec::new();
-    if let Some(w) = limit_warning("milestones", milestone_list.len(), limit) {
-        warnings.push(w);
-    }
-    if let Some(w) = limit_warning("tickets", ticket_list.len(), limit) {
-        warnings.push(w);
-    }
 
     // 4. Comments (optional, expensive: 1 call per ticket)
     let mut comments: Vec<Value> = Vec::new();
@@ -225,26 +195,4 @@ pub fn list_backups() -> Vec<(std::path::PathBuf, u64)> {
         .unwrap_or_default();
     backups.sort_by(|a, b| b.0.file_name().cmp(&a.0.file_name()));
     backups
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn limit_warning_fires_at_exact_limit() {
-        let w = limit_warning("tickets", 500, 500).expect("warning expected at exact limit");
-        assert!(w.contains("NOT captured"), "{}", w);
-        assert!(w.contains("LEANTIME_MCP_FETCH_LIMIT"), "{}", w);
-        // Beyond the limit (should not happen normally, but the check is >=)
-        assert!(limit_warning("tickets", 600, 500).is_some());
-    }
-
-    #[test]
-    fn limit_warning_silent_below_limit() {
-        assert!(limit_warning("tickets", 279, 500).is_none());
-        assert!(limit_warning("tickets", 499, 500).is_none());
-        // Degenerate limit 0 — never warn
-        assert!(limit_warning("tickets", 0, 0).is_none());
-    }
 }

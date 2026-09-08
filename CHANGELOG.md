@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.4.0 — 2026-09-08
+
+### Added
+
+- **Date-window pagination on completeness fetches**: backup, restore verification and `leantime_project_context` are now immune to the API's per-call limit. The fetch starts with a single unwindowed call (projects under `LEANTIME_MCP_FETCH_LIMIT` — 10 000 by default — still cost exactly one request); when that call comes back full, the [1970, now + 2 days] range is bisected by modification date until every window fits under the limit. Windows overlap by ±1s to defeat the API's strict `>`/`<` boundaries, results are deduplicated by ticket id, and ascending traversal makes concurrent modifications produce duplicates — never losses. Live-validated on a 279-ticket project with the limit forced to 100: the chunked pass returns the exact same id set as the fast path. Only pathological cases (more tickets than the limit sharing one timestamp) still emit a warning (backup result, restore report, `project_context.warnings`).
+
 ## v2.3.3 — 2026-09-08
 
 ### Fixed
