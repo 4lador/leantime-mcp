@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.4lador/leantime-mcp",
+  "title": "Leantime MCP (Unofficial)",
+  "description": "Unofficial MCP server for Leantime: 42 agent-first tools (tickets, milestones, sprints, timesheets, bulk operations), one-call project context, backup/restore, dry-run validation, adaptive rate-limit handling. Self-contained ~3 MB binary; credentials live in a local keyring, never in harness configs.",
+  "repository": {
+    "url": "https://github.com/4lador/leantime-mcp",
+    "source": "github"
+  },
+  "version": "2.5.0",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "identifier": "leantime-mcp",
+      "version": "2.5.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environment_variables": [
+        {
+          "name": "LEANTIME_URL",
+          "description": "Instance URL (per-run override — normally stored in the keyring via 'leantmcp url set')",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "LEANTIME_API_KEY",
+          "description": "API key (per-run override — normally stored in the keyring via 'leantmcp key set')",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "LEANTIME_INSTANCE",
+          "description": "Keyring profile to use (for multiple Leantime instances)",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

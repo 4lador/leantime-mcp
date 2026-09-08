@@ -1,14 +1,33 @@
 [package]
-name = "leantmcp"
+name = "leantime-mcp"
 version = "2.5.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Model Context Protocol server for Leantime"
+description = "Unofficial Model Context Protocol server for Leantime: 42 agent-first tools, backup/restore, dry-run validation"
 license = "MIT"
 repository = "https://github.com/4lador/leantime-mcp"
 readme = "README.md"
-keywords = ["leantime", "mcp", "model-context-protocol"]
-categories = ["command-line-utilities"]
+keywords = ["leantime", "mcp", "model-context-protocol", "project-management"]
+categories = ["command-line-utilities", "development-tools"]
+
+# The installed binary keeps its short name (leantmcp) — harness configs
+# point at ~/.local/bin/leantmcp and must never break on a rename.
+[lib]
+name = "leantmcp"
+
+[[bin]]
+name = "leantmcp"
+path = "src/main.rs"
+
+# Distribution-channel files stay out of the crate tarball.
+exclude = [
+    "docs/",
+    ".github/",
+    "docker-compose.yml",
+    "scripts/",
+    "install.sh",
+    "install.ps1",
+]
 
 [lints.rust]
 unsafe_code = "forbid"

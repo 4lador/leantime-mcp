@@ -1,7 +1,9 @@
 # leantime-mcp
 
+- MCP Registry name: `mcp-name: io.github.4lador/leantime-mcp`
+
 <p align="center">
-  <img src="docs/hero.png" alt="leantime-mcp" width="600">
+  <img src="https://raw.githubusercontent.com/4lador/leantime-mcp/main/docs/hero.png" alt="leantime-mcp" width="600">
 </p>
 
 [![CI](https://github.com/4lador/leantime-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/4lador/leantime-mcp/actions/workflows/ci.yml)
