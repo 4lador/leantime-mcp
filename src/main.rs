@@ -925,11 +925,17 @@ async fn handle_restore(args: &clap::ArgMatches) {
     }
 
     println!("\n=== Restoring... ===");
-    match leantmcp::restore::execute_restore(&mut c, &backup).await {
+    match leantmcp::restore::execute_restore(&mut c, &backup, file).await {
         Ok(r) => {
             println!("✓ {}", r.summary());
             for w in &r.warnings {
                 println!("  ⚠ {}", w);
+            }
+            // Restore manifest: source, target and the full old→new id
+            // mapping, written next to the backup — restores stay auditable.
+            match leantmcp::restore::write_restore_manifest(std::path::Path::new(file), &r) {
+                Ok(p) => println!("  📋 restore manifest: {}", p.display()),
+                Err(e) => println!("  ⚠ manifest not written: {}", e),
             }
         }
         Err(e) => {

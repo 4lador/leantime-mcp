@@ -326,3 +326,14 @@ jobs:
             sleep 20
           done
           echo "::warning::Registry listing did not show $VERSION within 100s (indexing lag?) — verify manually"
+
+  # Supply-chain: RustSec advisories (cargo-audit) + license/dependency
+  # policy (cargo-deny with a permissive default config).
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: EmbarkStudios/cargo-deny-action@v2

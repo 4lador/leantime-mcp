@@ -54,10 +54,66 @@ impl RestorePlan {
     }
 }
 
+/// Old→new id mappings accumulated during a restore (for the manifest).
+#[derive(Default)]
+pub struct IdMaps {
+    /// Milestone ids: old → new.
+    pub milestones: std::collections::HashMap<String, String>,
+    /// Sprint ids: old → new.
+    pub sprints: std::collections::HashMap<String, String>,
+    /// Ticket ids: old → new.
+    pub tickets: std::collections::HashMap<String, String>,
+}
+
+/// Write the restore manifest next to the backup file: source, target and
+/// the full old→new id mapping — restores become auditable after the fact.
+pub fn write_restore_manifest(
+    backup_path: &std::path::Path,
+    result: &RestoreResult,
+) -> Result<std::path::PathBuf, String> {
+    let manifest_path = backup_path.with_extension("restore-manifest.json");
+    let to_map = |m: &std::collections::HashMap<String, String>| -> Value {
+        let mut out = serde_json::Map::new();
+        let mut keys: Vec<_> = m.keys().collect();
+        keys.sort();
+        for k in keys {
+            out.insert(k.clone(), json!(m[k]));
+        }
+        Value::Object(out)
+    };
+    let manifest = json!({
+        "source": { "backup": backup_path.display().to_string() },
+        "target": {
+            "projectId": result.new_project_id,
+            "projectName": result.new_project_name,
+        },
+        "restoredAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "counts": {
+            "milestones": result.milestones_created,
+            "sprints": result.sprints_created,
+            "tickets": result.tickets_created,
+            "comments": result.comments_created,
+        },
+        "mapping": {
+            "milestones": to_map(&result.id_maps.milestones),
+            "sprints": to_map(&result.id_maps.sprints),
+            "tickets": to_map(&result.id_maps.tickets),
+        },
+    });
+    let content = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("manifest serialization: {}", e))?;
+    std::fs::write(&manifest_path, content).map_err(|e| format!("manifest write: {}", e))?;
+    Ok(manifest_path)
+}
+
 /// Result of an executed restore.
 pub struct RestoreResult {
     /// ID of the newly created project.
     pub new_project_id: String,
+    /// Old→new id mappings (for the restore manifest).
+    pub id_maps: IdMaps,
+    /// Path of the source backup file.
+    pub source_path: String,
     /// Name of the newly created project.
     pub new_project_name: String,
     /// Milestones successfully created.
@@ -534,6 +590,7 @@ pub fn plan_restore(backup: &Value) -> RestorePlan {
 pub async fn execute_restore(
     client: &mut LeantimeClient,
     backup: &Value,
+    source_display: &str,
 ) -> Result<RestoreResult, String> {
     let original_name = backup
         .pointer("/_meta/project/name")
@@ -928,6 +985,12 @@ pub async fn execute_restore(
     Ok(RestoreResult {
         new_project_id,
         new_project_name: new_name,
+        id_maps: IdMaps {
+            milestones: ms_map,
+            sprints: sprint_map,
+            tickets: ticket_map,
+        },
+        source_path: source_display.to_string(),
         milestones_created: ms_created,
         sprints_created: sprint_created,
         tickets_created,
