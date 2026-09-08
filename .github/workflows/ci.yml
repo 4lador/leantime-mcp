@@ -151,13 +151,10 @@ jobs:
         run: docker compose down -v
 
   # Contract tests against the LATEST Leantime release (API drift
-  # detection). Informative during the baseline phase: failures don't
-  # block the pipeline (continue-on-error) but the drift log is uploaded
-  # as an artifact. Harden — remove continue-on-error — once the
-  # baseline is stable.
+  # detection). Hardened: 7 consecutive green runs established the
+  # baseline (v2.7.0 through v2.8.0) — a failure now blocks the pipeline.
   local-e2e-latest:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
