@@ -91,6 +91,178 @@ pub enum ApiError {
     Unreachable,
 }
 
+/// Outcome of ONE HTTP round trip — retry policy stays with the caller
+/// ([`request_with_retries`]) so the sequential and concurrent paths can
+/// never diverge.
+enum RoundTrip {
+    Ok(Value),
+    /// 429 with the server's delay hint (Retry-After / X-RateLimit-Retry-After,
+    /// already capped) and rate-limit hint, when present.
+    TooManyRequests {
+        header_delay_ms: Option<u64>,
+        limit_hint: Option<u32>,
+    },
+    /// 502/503/504 — transient server trouble, worth retrying.
+    ServerError {
+        status: u16,
+        reason: String,
+    },
+    /// Terminal: network error, parse error, oversized body, non-retryable
+    /// HTTP status, or a JSON-RPC error object.
+    Fail(ApiError),
+}
+
+/// One HTTP attempt: send, classify, cap and parse the response.
+async fn rpc_roundtrip(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &Value,
+) -> RoundTrip {
+    let mut resp = match http
+        .post(url)
+        .header("x-api-key", api_key)
+        .json(body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return RoundTrip::Fail(ApiError::Network(e.to_string())),
+    };
+
+    let status = resp.status().as_u16();
+    let reason = resp.status().canonical_reason().unwrap_or("?").to_string();
+
+    if [502, 503, 504].contains(&status) {
+        return RoundTrip::ServerError { status, reason };
+    }
+
+    if status == 429 {
+        let header_delay_ms = LeantimeClient::parse_retry_after(&resp);
+        let limit_hint = resp
+            .headers()
+            .get("X-RateLimit-Limit")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|v| *v > 0); // 0 would cause a division by zero downstream
+        return RoundTrip::TooManyRequests {
+            header_delay_ms,
+            limit_hint,
+        };
+    }
+
+    if !resp.status().is_success() {
+        return RoundTrip::Fail(ApiError::Http { status, reason });
+    }
+
+    // Bound the buffered response: a hostile instance must not be able
+    // to OOM the process with a giant body. Chunked responses have no
+    // content-length, so the cap is enforced WHILE accumulating, not
+    // after the fact.
+    const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+    if let Some(len) = resp.content_length() {
+        if len as usize > MAX_RESPONSE_BYTES {
+            return RoundTrip::Fail(ApiError::TooLarge(len));
+        }
+    }
+    let mut raw = Vec::new();
+    loop {
+        let chunk = match resp.chunk().await {
+            Ok(c) => c,
+            Err(e) => return RoundTrip::Fail(ApiError::Network(e.to_string())),
+        };
+        let Some(chunk) = chunk else { break };
+        if raw.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return RoundTrip::Fail(ApiError::TooLarge((raw.len() + chunk.len()) as u64));
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    let json: Value = match serde_json::from_slice(&raw) {
+        Ok(v) => v,
+        Err(e) => return RoundTrip::Fail(ApiError::Parse(e.to_string())),
+    };
+
+    if let Some(err) = json.get("error") {
+        return RoundTrip::Fail(ApiError::Rpc {
+            code: err.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
+            message: err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("?")
+                .to_string(),
+            data: match err.get("data").and_then(|d| d.as_str()) {
+                Some(d) if !d.is_empty() => format!(" — {}", d),
+                _ => String::new(),
+            },
+        });
+    }
+
+    RoundTrip::Ok(json.get("result").cloned().unwrap_or(Value::Null))
+}
+
+/// Drive one logical request through the shared retry policy:
+/// 429 ≤ [`MAX_429_RETRIES`] with server-hinted or rate-derived delays,
+/// 502/503/504 ≤ [`MAX_NETWORK_RETRIES`]. `discovered_rate_limit` persists
+/// the instance's allowance when shared (sequential path) and stays
+/// per-request when spawned (concurrent path) — safe either way because
+/// the policy is reactive: the instance's limiter governs throughput.
+async fn request_with_retries(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &Value,
+    discovered_rate_limit: &mut Option<u32>,
+) -> Result<Value, ApiError> {
+    let mut network_retries = 0u32;
+    let mut last_429_delay = 0u64;
+
+    for attempt in 0..=(MAX_429_RETRIES + MAX_NETWORK_RETRIES) {
+        match rpc_roundtrip(http, url, api_key, body).await {
+            RoundTrip::Ok(v) => return Ok(v),
+            RoundTrip::ServerError { status, reason } => {
+                if (network_retries as usize) < MAX_NETWORK_RETRIES {
+                    network_retries += 1;
+                    let delay = if network_retries == 1 { 500 } else { 1000 };
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
+                return Err(ApiError::Http {
+                    status,
+                    reason: format!("{} (retried {} times)", reason, MAX_NETWORK_RETRIES),
+                });
+            }
+            RoundTrip::TooManyRequests {
+                header_delay_ms,
+                limit_hint,
+            } => {
+                if discovered_rate_limit.is_none() {
+                    *discovered_rate_limit = limit_hint;
+                }
+                if attempt < MAX_429_RETRIES {
+                    let limit = discovered_rate_limit.unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN);
+                    let rate_delay = (60_000 / limit as u64).max(1000);
+                    last_429_delay = header_delay_ms.unwrap_or(rate_delay);
+                    tokio::time::sleep(Duration::from_millis(last_429_delay)).await;
+                    continue;
+                }
+                let limit = discovered_rate_limit.unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN);
+                return Err(ApiError::RateLimit {
+                    retries: MAX_429_RETRIES,
+                    waited: if last_429_delay > 0 {
+                        format!(" (waited ~{}s per retry)", (last_429_delay + 500) / 1000)
+                    } else {
+                        String::new()
+                    },
+                    limit,
+                });
+            }
+            RoundTrip::Fail(e) => return Err(e),
+        }
+    }
+
+    Err(ApiError::Unreachable)
+}
+
 impl LeantimeClient {
     /// Build a client for one Leantime instance.
     pub fn new(base_url: &str, api_key: &str) -> Self {
@@ -110,13 +282,6 @@ impl LeantimeClient {
         }
     }
 
-    fn inter_request_delay_ms(&self) -> u64 {
-        let limit = self
-            .discovered_rate_limit
-            .unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN);
-        (60_000 / limit as u64).max(1000)
-    }
-
     /// Call a Leantime JSON-RPC method (`method` without the `leantime.rpc.` prefix).
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, ApiError> {
         self.rpc_id += 1;
@@ -126,128 +291,71 @@ impl LeantimeClient {
             "params": params,
             "id": self.rpc_id,
         });
-
         let url = format!("{}/api/jsonrpc", self.base_url);
-        let mut network_retries = 0u32;
-        let mut last_429_delay = 0u64;
+        request_with_retries(
+            &self.http,
+            &url,
+            &self.api_key,
+            &body,
+            &mut self.discovered_rate_limit,
+        )
+        .await
+    }
 
-        for attempt in 0..=(MAX_429_RETRIES + MAX_NETWORK_RETRIES) {
-            let mut resp = self
-                .http
-                .post(&url)
-                .header("x-api-key", &self.api_key)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| ApiError::Network(e.to_string()))?;
+    /// Fetch `comments.getComments` for many tickets with bounded concurrency.
+    /// Results come back in INPUT ORDER (deterministic backups); errors are
+    /// per-ticket so one failure never drops the whole batch. Concurrency is
+    /// an in-flight cap only — the retry policy stays reactive (429 backoff),
+    /// so the instance's rate limit always governs aggregate throughput.
+    pub async fn get_comments_for_tickets(
+        &mut self,
+        ticket_ids: &[String],
+        concurrency: usize,
+    ) -> Vec<Result<Value, ApiError>> {
+        if ticket_ids.is_empty() {
+            return Vec::new();
+        }
+        let start_id = self.rpc_id + 1;
+        self.rpc_id += ticket_ids.len() as u64;
+        let http = self.http.clone();
+        let url = format!("{}/api/jsonrpc", self.base_url);
+        let api_key = self.api_key.clone();
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
 
-            let status = resp.status().as_u16();
-
-            if [502, 503, 504].contains(&status) {
-                if (network_retries as usize) < MAX_NETWORK_RETRIES {
-                    network_retries += 1;
-                    let delay = if network_retries == 1 { 500 } else { 1000 };
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    continue;
-                }
-                return Err(ApiError::Http {
-                    status,
-                    reason: format!(
-                        "{} (retried {} times)",
-                        resp.status().canonical_reason().unwrap_or("?"),
-                        MAX_NETWORK_RETRIES
-                    ),
-                });
-            }
-
-            if status == 429 {
-                if self.discovered_rate_limit.is_none() {
-                    if let Some(limit) = resp
-                        .headers()
-                        .get("X-RateLimit-Limit")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.parse::<u32>().ok())
-                        .filter(|v| *v > 0)
-                    {
-                        // 0 would cause a division by zero downstream
-                        self.discovered_rate_limit = Some(limit);
-                    }
-                }
-
-                if attempt < MAX_429_RETRIES {
-                    // Retry-After: seconds or HTTP-date; X-RateLimit-Retry-After: seconds only.
-                    let header_delay = Self::parse_retry_after(&resp);
-                    let rate_delay = self.inter_request_delay_ms();
-                    last_429_delay = header_delay.unwrap_or(rate_delay);
-                    tokio::time::sleep(Duration::from_millis(last_429_delay)).await;
-                    continue;
-                }
-
-                let limit = self
-                    .discovered_rate_limit
-                    .unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN);
-                return Err(ApiError::RateLimit {
-                    retries: MAX_429_RETRIES,
-                    waited: if last_429_delay > 0 {
-                        format!(" (waited ~{}s per retry)", (last_429_delay + 500) / 1000)
-                    } else {
-                        String::new()
-                    },
-                    limit,
-                });
-            }
-
-            if !resp.status().is_success() {
-                return Err(ApiError::Http {
-                    status,
-                    reason: resp.status().canonical_reason().unwrap_or("?").to_string(),
-                });
-            }
-
-            // Bound the buffered response: a hostile instance must not be able
-            // to OOM the process with a giant body. Chunked responses have no
-            // content-length, so the cap is enforced WHILE accumulating, not
-            // after the fact.
-            const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
-            if let Some(len) = resp.content_length() {
-                if len as usize > MAX_RESPONSE_BYTES {
-                    return Err(ApiError::TooLarge(len));
-                }
-            }
-            let mut body = Vec::new();
-            loop {
-                let chunk = resp
-                    .chunk()
+        let mut handles = Vec::with_capacity(ticket_ids.len());
+        for (i, tid) in ticket_ids.iter().enumerate() {
+            let http = http.clone();
+            let url = url.clone();
+            let api_key = api_key.clone();
+            let tid = tid.clone();
+            let sem = sem.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = sem
+                    .acquire()
                     .await
                     .map_err(|e| ApiError::Network(e.to_string()))?;
-                let Some(chunk) = chunk else { break };
-                if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                    return Err(ApiError::TooLarge((body.len() + chunk.len()) as u64));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            let json: Value =
-                serde_json::from_slice(&body).map_err(|e| ApiError::Parse(e.to_string()))?;
-
-            if let Some(err) = json.get("error") {
-                return Err(ApiError::Rpc {
-                    code: err.get("code").and_then(|c| c.as_i64()).unwrap_or(0),
-                    message: err
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("?")
-                        .to_string(),
-                    data: match err.get("data").and_then(|d| d.as_str()) {
-                        Some(d) if !d.is_empty() => format!(" — {}", d),
-                        _ => String::new(),
-                    },
+                let body = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "leantime.rpc.comments.getComments",
+                    "params": {"module": "ticket", "entityId": tid},
+                    "id": start_id + i as u64,
                 });
-            }
-
-            return Ok(json.get("result").cloned().unwrap_or(Value::Null));
+                // Local limiter state per request: the shared &mut client
+                // cannot cross the spawn boundary, and the policy is reactive
+                // (429-driven) so per-request state is safe — the instance's
+                // rate limit governs everyone regardless.
+                let mut discovered = None;
+                request_with_retries(&http, &url, &api_key, &body, &mut discovered).await
+            }));
         }
-
-        Err(ApiError::Unreachable)
+        let mut out = Vec::with_capacity(handles.len());
+        for h in handles {
+            match h.await {
+                Ok(r) => out.push(r),
+                Err(e) => out.push(Err(ApiError::Network(e.to_string()))),
+            }
+        }
+        out
     }
 
     /// Parse Retry-After / X-RateLimit-Retry-After headers into milliseconds.

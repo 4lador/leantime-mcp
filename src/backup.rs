@@ -62,6 +62,19 @@ fn backup_dir() -> std::path::PathBuf {
     config::secret_dir().join("backups")
 }
 
+/// Comment-fetch concurrency for `--full` backups (LEANTIME_MCP_BACKUP_CONCURRENCY).
+/// Default 1 = sequential — the safe choice for rate-limited instances where
+/// concurrency buys nothing. Higher values (capped at 8) only pay off on
+/// instances with generous limits, where round-trip latency — not the rate
+/// limit — is the bottleneck.
+fn comment_concurrency() -> usize {
+    std::env::var("LEANTIME_MCP_BACKUP_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(1)
+        .clamp(1, 8)
+}
+
 /// Sanitize a project name for use in a filename.
 fn sanitize_name(name: &str) -> String {
     name.chars()
@@ -105,21 +118,24 @@ pub async fn backup_project(
 
     let sprint_list = sprints.as_array().cloned().unwrap_or_default();
 
-    // 4. Comments (optional, expensive: 1 call per ticket)
+    // 4. Comments (optional, expensive: 1 call per ticket). Bounded
+    //    concurrency via LEANTIME_MCP_BACKUP_CONCURRENCY (default 1 =
+    //    sequential, kind to rate-limited instances); results stay in
+    //    ticket order so the backup file is deterministic either way.
     let mut comments: Vec<Value> = Vec::new();
-    if full {
-        for t in &ticket_list {
-            let tid = match &t["id"] {
+    if full && !ticket_list.is_empty() {
+        let tids: Vec<String> = ticket_list
+            .iter()
+            .map(|t| match &t["id"] {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
-            };
-            if let Ok(c) = client
-                .call(
-                    "comments.getComments",
-                    json!({"module": "ticket", "entityId": tid}),
-                )
-                .await
-            {
+            })
+            .collect();
+        let results = client
+            .get_comments_for_tickets(&tids, comment_concurrency())
+            .await;
+        for (tid, res) in tids.iter().zip(results) {
+            if let Ok(c) = res {
                 if let Some(arr) = c.as_array() {
                     for comment in arr {
                         comments.push(json!({"ticketId": tid, "comment": comment}));

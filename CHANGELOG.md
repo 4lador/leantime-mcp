@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.5.0 — 2026-09-08
+
+### Added
+
+- **Concurrent comment harvesting for `--full` backups** (`LEANTIME_MCP_BACKUP_CONCURRENCY`, 1-8, default 1): the per-ticket comment calls now run with bounded concurrency through the shared HTTP pool. The default stays sequential — on rate-limited instances (~10 req/min) concurrency buys nothing and reactive 429 backoff governs throughput regardless; on instances with generous limits, N>1 removes round-trip latency from the wall clock. Results are collected in input order, so the backup file is byte-identical whatever the concurrency (live-verified: C=1 and C=4 produce the same comments in the same order). Under the hood the request/retry policy (429 ≤5 with server-hinted delays, 502/503/504 ≤2, 64 MB response cap) was extracted into a single shared implementation — the sequential and concurrent paths can no longer diverge.
+
 ## v2.4.0 — 2026-09-08
 
 ### Added

@@ -361,7 +361,7 @@ leantmcp restore backup.json        # dry-run: shows what would be restored
 leantmcp restore backup.json --confirm  # execute the restore
 ```
 
-Backups land in `~/.config/leantime/backups/<project-name>-<timestamp>.json` (mode 0600). Fast mode captures milestones, tickets and sprints in 3 API calls. `--full` adds per-ticket comments at 1 call per ticket — on a rate-limited instance (~10 req/min), expect roughly 1 minute per 10 tickets.
+Backups land in `~/.config/leantime/backups/<project-name>-<timestamp>.json` (mode 0600). Fast mode captures milestones, tickets and sprints in 3 API calls. `--full` adds per-ticket comments at 1 call per ticket — on a rate-limited instance (~10 req/min), expect roughly 1 minute per 10 tickets. On instances with generous limits, `LEANTIME_MCP_BACKUP_CONCURRENCY=N` (1-8, default 1) fetches comments concurrently — results stay in ticket order so the backup file is identical either way.
 
 **Large projects**: completeness fetches (backup, restore verification, project_context) are immune to the API's per-call limit — a project larger than the limit (10 000 by default, override with `LEANTIME_MCP_FETCH_LIMIT`) is fetched completely via automatic date-window pagination: the window is bisected until every slice fits under the limit, results are deduplicated, and concurrent modifications can only produce duplicates, never losses. Normal projects pay exactly one request per fetch (the fast path). Only pathological cases (more tickets than the limit sharing one exact timestamp) still produce a `warnings` entry. `leantime_list_tickets` is separately capped at 500 results to protect the agent's context window, and says so in a note when the cap is hit.
 

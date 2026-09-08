@@ -611,3 +611,177 @@ async fn chunked_depth_cap_emits_warning() {
     assert!(warnings[0].contains("depth cap"), "{:?}", warnings);
     window.assert();
 }
+
+// ---- concurrent comment harvesting (backup --full) ----
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Minimal JSON-RPC HTTP server with a fixed per-request delay — mockito
+/// cannot delay responses and the concurrency tests need observable latency.
+/// Every accepted connection is served concurrently after the delay.
+async fn slow_jsonrpc_server(delay_ms: u64) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // Consume headers + full body before responding.
+                loop {
+                    let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n");
+                    if let Some(pos) = header_end {
+                        let headers = String::from_utf8_lossy(&buf[..pos]).to_ascii_lowercase();
+                        let cl = headers
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if buf.len() >= pos + 4 + cl {
+                            break;
+                        }
+                    }
+                    match sock.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                let body = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{}", addr)
+}
+
+#[tokio::test]
+async fn comments_fetch_preserves_input_order_despite_concurrency() {
+    let mut server = Server::new_async().await;
+    for (tid, text) in [("101", "alpha"), ("102", "bravo"), ("103", "charlie")] {
+        let _m = server
+            .mock("POST", "/api/jsonrpc")
+            .match_body(mockito::Matcher::PartialJsonString(
+                json!({"params": {"module": "ticket", "entityId": tid}}).to_string(),
+            ))
+            .with_status(200)
+            .with_header("Content-Type", "application/json")
+            .with_body(json!({"jsonrpc": "2.0", "result": [{"text": text}], "id": 1}).to_string())
+            .create_async()
+            .await;
+    }
+    let mut client = LeantimeClient::new(&server.url(), "k");
+    let tids: Vec<String> = ["101", "102", "103"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let results = client.get_comments_for_tickets(&tids, 3).await;
+    assert_eq!(results.len(), 3);
+    let texts: Vec<String> = results
+        .iter()
+        .map(|r| {
+            r.as_ref().expect("per-ticket ok").as_array().unwrap()[0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    // Order is the INPUT order, not completion order.
+    assert_eq!(texts, vec!["alpha", "bravo", "charlie"]);
+}
+
+#[tokio::test]
+async fn comments_fetch_concurrency_beats_sequential_latency() {
+    let url = slow_jsonrpc_server(200).await;
+    let mut client = LeantimeClient::new(&url, "k");
+    let tids: Vec<String> = (1..=6).map(|i| i.to_string()).collect();
+    let t0 = std::time::Instant::now();
+    let results = client.get_comments_for_tickets(&tids, 3).await;
+    let elapsed = t0.elapsed();
+    assert!(results.iter().all(|r| r.is_ok()));
+    // 6 × 200ms with an in-flight cap of 3 ≈ 2 rounds ≈ 400ms. A fully
+    // serialized run would take ≥ 1200ms — staying well under that proves
+    // at least ~2× concurrency (generous margin for CI scheduling).
+    assert!(
+        elapsed < std::time::Duration::from_millis(1100),
+        "no observable concurrency: {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn comments_fetch_default_concurrency_serializes() {
+    let url = slow_jsonrpc_server(120).await;
+    let mut client = LeantimeClient::new(&url, "k");
+    let tids: Vec<String> = (1..=4).map(|i| i.to_string()).collect();
+    let t0 = std::time::Instant::now();
+    let results = client.get_comments_for_tickets(&tids, 1).await;
+    let elapsed = t0.elapsed();
+    assert!(results.iter().all(|r| r.is_ok()));
+    // C=1: the semaphore admits one request at a time → ≥ 4 × 120ms.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(4 * 120),
+        "requests overlapped despite C=1: {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn comments_fetch_retries_429_per_ticket() {
+    let mut server = Server::new_async().await;
+    // Ticket "1": one 429 (Retry-After: 0) then success — same pattern as
+    // the sequential 429 tests.
+    let _m429 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"entityId": "1"}}).to_string(),
+        ))
+        .with_status(429)
+        .with_header("Retry-After", "0")
+        .with_body(r#"{"error": "Too many requests"}"#)
+        .create_async()
+        .await;
+    let _mok = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"entityId": "1"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(json!({"jsonrpc": "2.0", "result": [{"text": "retried"}], "id": 1}).to_string())
+        .create_async()
+        .await;
+    // Ticket "2": straight success.
+    let _m2 = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"params": {"entityId": "2"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(json!({"jsonrpc": "2.0", "result": [], "id": 2}).to_string())
+        .create_async()
+        .await;
+
+    let mut client = LeantimeClient::new(&server.url(), "k");
+    let tids: Vec<String> = ["1", "2"].iter().map(|s| s.to_string()).collect();
+    let results = client.get_comments_for_tickets(&tids, 2).await;
+    assert!(
+        results[0].is_ok(),
+        "429 should be retried: {:?}",
+        results[0]
+    );
+    assert!(results[1].is_ok());
+    _m429.assert();
+    _mok.assert();
+}
