@@ -191,13 +191,44 @@ fn h_update_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
             }
             return dry_run_result(true, vec![], changes, warnings);
         }
+        // Execute path: one pre-patch read for the changed/unchanged envelope.
+        let ms = match c.call("tickets.getTicket", json!({"id": mid})).await {
+            Ok(m) if !m.is_boolean() && !is_leantime_error(&m) => m,
+            Ok(_) => return error_result(&format!("Milestone {} not found.", mid)),
+            Err(e) => return error_result(&e.to_string()),
+        };
+        let pid = ms
+            .get("projectId")
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        let sm = c.get_status_map(&pid).await.unwrap_or(json!({}));
+        let field_map: &[(&str, &str)] = &[
+            ("headline", "headline"),
+            ("status", "status"),
+            ("editorId", "editorId"),
+            ("dateToFinish", "dateToFinish"),
+            ("dependentMilestone", "milestoneid"),
+        ];
+        let (changed, unchanged) = execute_diff(&a, &ms, field_map, Some(&sm));
         // quickUpdateMilestone reads projectId from the session (unset for API
         // keys) — use the safe generic ticket patch instead.
         match c
             .call("tickets.patch", json!({ "id": mid, "params": ch }))
             .await
         {
-            Ok(r) => ok_result(&json!({ "ok": r == json!(true), "id": mid })),
+            Ok(r) => ok_result(&json!({
+                "ok": r == json!(true),
+                "id": mid,
+                "changed": changed,
+                "unchanged": unchanged,
+                "warnings": unchanged.iter().map(|u| json!({
+                    "field": u["field"],
+                    "reason": "already had target value",
+                })).collect::<Vec<_>>(),
+            })),
             Err(e) => error_result(&e.to_string()),
         }
     })

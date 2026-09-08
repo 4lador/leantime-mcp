@@ -138,12 +138,13 @@ fn h_list_tickets(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value>
                 // The limit protects the agent's context window (unlike the
                 // completeness paths, which use the configurable fetch limit).
                 if items.len() >= LIST_TICKETS_LIMIT {
-                    let mut out = json!({ "tickets": items });
-                    out["note"] = json!(format!(
-                        "showing first {} — refine filters (status, milestoneId, sprintId, type, search) to narrow the result",
-                        LIST_TICKETS_LIMIT
-                    ));
-                    return ok_result(&out);
+                    // Structured truncation — a boolean is much harder for
+                    // an LLM to miss than a textual note.
+                    return ok_result(&json!({
+                        "tickets": items,
+                        "returned": LIST_TICKETS_LIMIT,
+                        "truncated": true,
+                    }));
                 }
                 ok_result(&json!(items))
             }
@@ -343,11 +344,50 @@ fn h_update_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
             }
             return dry_run_result(true, vec![], changes, warnings);
         }
+        // Execute path: one pre-patch read to report what actually changed
+        // (from-values resolved against the live entity, not assumptions).
+        let ticket = match c.call("tickets.getTicket", json!({"id": tid})).await {
+            Ok(t) if !t.is_boolean() && !is_leantime_error(&t) => t,
+            Ok(_) => return error_result(&format!("Ticket {} not found.", tid)),
+            Err(e) => return error_result(&e.to_string()),
+        };
+        let pid = ticket
+            .get("projectId")
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        let sm = c.get_status_map(&pid).await.unwrap_or(json!({}));
+        let field_map: &[(&str, &str)] = &[
+            ("headline", "headline"),
+            ("type", "type"),
+            ("priority", "priority"),
+            ("status", "status"),
+            ("editorId", "editorId"),
+            ("tags", "tags"),
+            ("storypoints", "storypoints"),
+            ("dateToFinish", "dateToFinish"),
+            ("planHours", "planHours"),
+            ("dependingTicketId", "dependingTicketId"),
+            ("milestoneId", "milestoneid"),
+            ("sprintId", "sprint"),
+        ];
+        let (changed, unchanged) = execute_diff(&a, &ticket, field_map, Some(&sm));
         match c
             .call("tickets.patch", json!({ "id": tid, "params": ch }))
             .await
         {
-            Ok(r) => ok_result(&json!({ "ok": r == json!(true), "id": tid })),
+            Ok(r) => ok_result(&json!({
+                "ok": r == json!(true),
+                "id": tid,
+                "changed": changed,
+                "unchanged": unchanged,
+                "warnings": unchanged.iter().map(|u| json!({
+                    "field": u["field"],
+                    "reason": "already had target value",
+                })).collect::<Vec<_>>(),
+            })),
             Err(e) => error_result(&e.to_string()),
         }
     })

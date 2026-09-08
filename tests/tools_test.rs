@@ -857,6 +857,28 @@ async fn list_tickets_omits_absent_filters() {
 #[tokio::test]
 async fn update_ticket_sends_only_changed_fields() {
     let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "9"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "9", "projectId": "3", "headline": "Old", "status": "3"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
     let m = server
         .mock("POST", "/api/jsonrpc")
         .match_body(mockito::Matcher::PartialJsonString(
@@ -879,7 +901,14 @@ async fn update_ticket_sends_only_changed_fields() {
     .await;
     let (is_err, parsed) = parse(&r);
     assert!(!is_err, "{:?}", parsed);
-    assert_eq!(parsed, json!({"ok": true, "id": "9"}));
+    assert_eq!(parsed["ok"], json!(true));
+    assert_eq!(parsed["id"], json!("9"));
+    // envelope: headline changed Old → New; status not provided → absent
+    let changed = parsed["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0]["field"], json!("headline"));
+    assert_eq!(changed[0]["from"], json!("Old"));
+    assert_eq!(changed[0]["to"], json!("New"));
     m.assert();
 }
 
@@ -2170,8 +2199,8 @@ async fn list_tickets_notes_truncation_at_cap() {
     assert!(!is_err, "{:?}", parsed);
     assert!(parsed.get("tickets").is_some(), "wrapped shape expected");
     assert_eq!(parsed["tickets"].as_array().map(|a| a.len()), Some(500));
-    let note = parsed["note"].as_str().unwrap_or_default();
-    assert!(note.contains("showing first 500"), "{}", note);
+    assert_eq!(parsed["returned"], json!(500));
+    assert_eq!(parsed["truncated"], json!(true));
     m.assert();
 }
 
@@ -2631,4 +2660,123 @@ async fn idempotency_bulk_create_replays_whole_batch() {
     assert_eq!(replayed["summary"]["created"], json!(2));
     mutation.assert();
     users.assert();
+}
+
+// ---------------------------------------------------------------- result envelopes
+
+#[tokio::test]
+async fn update_ticket_envelope_reports_changed_and_unchanged() {
+    let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "12"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "12", "projectId": "3", "headline": "Same", "priority": 2, "status": "0"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"0": {"name": "New", "statusType": "NEW"}, "3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!(true)))
+        .expect(1)
+        .create_async()
+        .await;
+
+    // headline "Same" = already that value (unchanged); status 0→3 changes
+    let r = call(
+        "leantime_update_ticket",
+        json!({"ticketId": "12", "headline": "Same", "status": 3}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+
+    let changed = parsed["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 1, "{:?}", changed);
+    assert_eq!(changed[0]["field"], json!("status"));
+    assert_eq!(changed[0]["from"], json!("0"));
+    assert_eq!(changed[0]["to"], json!(3));
+    assert_eq!(changed[0]["label"], json!("New → Done"));
+
+    let unchanged = parsed["unchanged"].as_array().unwrap();
+    assert_eq!(unchanged.len(), 1, "{:?}", unchanged);
+    assert_eq!(unchanged[0]["field"], json!("headline"));
+    assert_eq!(unchanged[0]["value"], json!("Same"));
+
+    let warnings = parsed["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["field"], json!("headline"));
+    m.assert();
+}
+
+#[tokio::test]
+async fn update_milestone_envelope_reports_changed() {
+    let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "20"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "20", "projectId": "3", "type": "milestone", "headline": "Old name"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!(true)))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_update_milestone",
+        json!({"milestoneId": "20", "headline": "New name"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    let changed = parsed["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0]["field"], json!("headline"));
+    assert_eq!(changed[0]["from"], json!("Old name"));
+    assert_eq!(changed[0]["to"], json!("New name"));
+    m.assert();
 }

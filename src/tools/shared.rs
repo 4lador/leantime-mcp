@@ -166,6 +166,59 @@ pub(super) fn dry_run_changes(
     (changes, warnings)
 }
 
+/// Execution-time diff for result envelopes: fields that will actually
+/// change (`changed`, with from/to) vs fields already holding the target
+/// value (`unchanged`). Same mapping logic as `dry_run_changes`, but
+/// split for the agent-facing response — "what did this call really do".
+pub(super) fn execute_diff(
+    args: &Value,
+    current: &Value,
+    field_map: &[(&str, &str)],
+    status_map: Option<&Value>,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut changed = Vec::new();
+    let mut unchanged = Vec::new();
+    for (arg_key, entity_key) in field_map {
+        let to = match args.get(arg_key) {
+            Some(v) if !v.is_null() => v.clone(),
+            _ => continue,
+        };
+        let from = current.get(entity_key).cloned().unwrap_or(Value::Null);
+        let same = loose_eq(&to, &from);
+        let mut entry = Value::Null;
+        if *arg_key == "status" {
+            if let Some(sm) = status_map {
+                let label = |v: &Value| -> String {
+                    let key = match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    sm.get(&key)
+                        .and_then(|l| l.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| key.clone())
+                };
+                entry = serde_json::json!({
+                    "field": arg_key,
+                    "from": from,
+                    "to": to,
+                    "label": format!("{} → {}", label(&from), label(&to)),
+                });
+            }
+        }
+        if entry.is_null() {
+            entry = serde_json::json!({"field": arg_key, "from": from, "to": to});
+        }
+        if same {
+            unchanged.push(serde_json::json!({"field": arg_key, "value": to}));
+        } else {
+            changed.push(entry);
+        }
+    }
+    (changed, unchanged)
+}
+
 /// Leantime services report errors as objects like `{msg, type: "error"}` —
 /// surface them as tool errors.
 pub(super) fn is_leantime_error(v: &Value) -> bool {
