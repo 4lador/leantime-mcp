@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.5.1 — 2026-09-08
+
+### Changed
+
+- **Documentation refresh** (docs-only release): the README's What's-new stack — which had stopped at v2.3.1 — is consolidated into a single section covering the v2.3.2 → v2.5.0 series, with MCP Registry and crates.io badges in the header. Published primarily so the crates.io page (which renders the README embedded at publish time) matches the repository.
+
 ## v2.5.0 — 2026-09-08
 
 ### Added
