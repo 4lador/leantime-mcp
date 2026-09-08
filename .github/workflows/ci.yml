@@ -255,9 +255,19 @@ jobs:
         if: steps.already_published.outputs.skip != 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.already_published.outputs.skip != 'true'
-      - name: Publish crate to crates.io (keyless)
+      # Trusted publishing client side: cargo does NOT perform the OIDC
+      # exchange by itself — this official action exchanges the job's GitHub
+      # JWT for a temporary crates.io token (auto-revoked by its post step).
+      # Learned the hard way in the v2.5.2 run ("no token found", exit 101).
+      - name: Authenticate with crates.io (trusted publishing)
+        id: crates_auth
+        if: steps.already_published.outputs.skip != 'true'
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish crate to crates.io (temporary token)
         if: steps.already_published.outputs.skip != 'true'
         run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates_auth.outputs.token }}
       - name: Install mcp-publisher
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher

@@ -1,10 +1,16 @@
 # Changelog
 
+## v2.5.3 — 2026-09-08
+
+### Changed
+
+- **CI verification release, attempt 2** — no functional changes. The v2.5.2 run exposed the missing client side of crates.io trusted publishing (`cargo publish` performs no OIDC exchange by itself — exit 101, "no token found"). The publish job now uses the official `rust-lang/crates-io-auth-action` to exchange the job's GitHub JWT for a temporary, auto-revoked crates.io token.
+
 ## v2.5.2 — 2026-09-08
 
 ### Changed
 
-- **CI verification release** — no functional changes. First end-to-end run of the tag-triggered `publish` job (crates.io via keyless trusted publishing, MCP Registry via OIDC). Exists to prove the automation before a genuine release depends on it.
+- **CI verification release** — no functional changes. First end-to-end run of the tag-triggered `publish` job (crates.io via keyless trusted publishing, MCP Registry via OIDC). The crates.io step failed before publishing anything (see v2.5.3); binaries were released normally.
 
 ## v2.5.1 — 2026-09-08
 
