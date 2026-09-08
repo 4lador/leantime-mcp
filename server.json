@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.4lador/leantime-mcp",
   "title": "Leantime MCP (Unofficial)",
-  "description": "Unofficial MCP server for Leantime: 42 agent-first tools (tickets, milestones, sprints, timesheets, bulk operations), one-call project context, backup/restore, dry-run validation, adaptive rate-limit handling. Self-contained ~3 MB binary; credentials live in a local keyring, never in harness configs.",
+  "description": "Unofficial MCP server for Leantime: 42 agent-first tools, backup/restore, dry-run validation",
   "repository": {
     "url": "https://github.com/4lador/leantime-mcp",
     "source": "github"
