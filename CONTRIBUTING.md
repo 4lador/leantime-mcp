@@ -61,6 +61,8 @@ Security reports follow [SECURITY.md](SECURITY.md) — never a public issue.
 ## Release process
 
 1. Update `CHANGELOG.md` (move `## Unreleased` under the new version + date)
-2. Bump `version` in `Cargo.toml` (the binary reports `CARGO_PKG_VERSION` — single source of truth)
-3. Commit, tag `vX.Y.Z`, push the tag — CI runs the full matrix then builds the 5 release
-   artifacts with SHA-256 checksums and attaches them to the GitHub release
+2. Bump the version in `Cargo.toml` AND in `server.json` (top-level `version` and `packages[0].version` — the CI publish job fails fast if they don't match the tag)
+3. Commit, merge to `main`, tag `vX.Y.Z`, push the tag
+4. CI does the rest, in order: full test matrix → 5 release artifacts with SHA-256 checksums → GitHub release → **automatic publishing** — the crate to crates.io (keyless trusted publishing via `rust-lang/crates-io-auth-action`, temporary token auto-revoked) and `server.json` to the MCP Registry (OIDC, keyless). A version-consistency guard fails the run before anything is published if versions drift, and an idempotency guard makes tag-workflow re-runs safe.
+
+The README ships inside the crate as it exists at the tag — finalize documentation before tagging. There is no "What's new" section in the README by design; the CHANGELOG is the release history.

@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "leantime-mcp"
-version = "2.5.3"
+version = "2.5.4"
 dependencies = [
  "chrono",
  "clap",

@@ -15,36 +15,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantim
 
 **~3 MB self-contained binary** (rustls — no system OpenSSL), **1.2 ms median startup** (measured over 100 spawns), **~5 MB idle memory** (VmRSS after handshake).
 
-**Documentation**: [Migrating from v1.x](#migrating-from-v1x) · [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
-
-## What's new in v2.5.0
-
-The v2.3.2 → v2.5.0 series (all shipped 2026-09-08):
-
-- **Date-window pagination** (v2.4.0) — completeness fetches (backup, restore verification, project_context) are immune to the API's per-call limit: windows are bisected by modification date until everything fits, with id-deduplication so concurrent modifications can only produce duplicates, never losses.
-- **Concurrent `--full` backups** (v2.5.0) — `LEANTIME_MCP_BACKUP_CONCURRENCY` (1-8, default 1) fetches comments in parallel on generous instances; results stay in ticket order, the backup file is identical whatever the concurrency.
-- **Fixes** — silent truncation at the fetch limit (v2.3.2 — now configurable via `LEANTIME_MCP_FETCH_LIMIT` with explicit warnings), and the `status` label filter returning the wrong tickets (v2.3.3 — labels now resolve to their IDs).
-- **Installable via cargo** — `cargo install leantime-mcp`, and listed on the official [MCP Registry](https://registry.modelcontextprotocol.io).
-
-Earlier releases — dry-run validation, `leantime_project_context`, backup/restore, the Rust rewrite — see the [CHANGELOG](CHANGELOG.md).
-
-## Migrating from v1.x
-
-The keyring, credentials and harness configs are **fully compatible** — the v2 binary is a drop-in replacement:
-
-- **Your keyring works as-is**: `~/.config/leantime/instances/<name>/` is unchanged since v1.7.0. Both profiles and the `default` file resolve identically.
-- **Your install URL still works**: `curl -fsSL https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.sh | sh` delivers the v2 binary at the same location (`~/.local/bin/leantmcp`). The installer verifies the SHA-256 checksum as before.
-- **Your harness configs need no change**: they point to `~/.local/bin/leantmcp` (bare command) — replacing the binary replaces the server. Restart your MCP session to pick up the new version.
-- **The v1.x source code is preserved** on the [`frozen-legacy-ts`](https://github.com/4lador/leantime-mcp/tree/frozen-legacy-ts) branch. It will not receive updates or security fixes.
-
-Why the rewrite? The v1.x binary embedded the Deno/V8 runtime:
-
-| | v1.x (Deno/TypeScript) | v2.0.0 (Rust) |
-|---|---|---|
-| Binary size | ~100 MB | **~3 MB** |
-| Startup | ~200 ms | **1.2 ms** (median, n=100) |
-| Memory (idle) | ~50 MB | **~5 MB** (VmRSS) |
-| Runtime deps | Deno/V8 embedded | **none (rustls)** |
+**Documentation**: [Key management](#key-management) · [Safety](#safety-destructive-operations) · [Available MCP Tools](#available-mcp-tools) · [Development](#development) · [Migration from v1.x](migration-from-1.x.md) · [CHANGELOG](CHANGELOG.md) · [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [LICENSE](LICENSE)
 
 ## Features
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.5.4 — 2026-09-08
+
+### Changed
+
+- **Documentation overhaul**: the README's What's-new section is gone for good (the CHANGELOG is the release history — a dated section in the README kept going stale, most recently after v2.5.1); "Migrating from v1.x" moved to its own [migration-from-1.x.md](migration-from-1.x.md), referenced once from the README. CONTRIBUTING's release process now documents the automated tag-triggered publishing (crates.io trusted publishing + MCP Registry) and its guards. Docs-only release.
+
 ## v2.5.3 — 2026-09-08
 
 ### Changed
@@ -10,7 +16,7 @@
 
 ### Changed
 
-- **CI verification release** — no functional changes. First end-to-end run of the tag-triggered `publish` job (crates.io via keyless trusted publishing, MCP Registry via OIDC). The crates.io step failed before publishing anything (see v2.5.3); binaries were released normally.
+- **CI verification release** — no functional changes. First end-to-end run of the tag-triggered `publish` job (crates.io via keyless trusted publishing, MCP Registry via OIDC). The crates.io step failed before publishing anything (see v2.5.3); binaries were released normally. **This version does not exist on crates.io and cannot be backfilled**: the crate's trusted publishing is configured in exclusive mode (CI-only publishes, no token publishes) — the version gap on crates.io (2.5.1 → 2.5.3) is the accepted price of that security posture.
 
 ## v2.5.1 — 2026-09-08
 
