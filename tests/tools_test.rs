@@ -34,6 +34,22 @@ async fn call(name: &str, args: Value, url: &str) -> Value {
     handler(args, client).await
 }
 
+/// Same as `call` but pins the idempotency journal to a temp dir (unique
+/// per call site) so key behavior can be exercised end-to-end.
+async fn call_idem(name: &str, args: Value, url: &str, tag: &str) -> Value {
+    let tool = get_tool(name);
+    let dir =
+        std::env::temp_dir().join(format!("leantmcp-idem-tool-{}-{}", tag, std::process::id()));
+    // Create without wiping: the journal must survive across successive
+    // call_idem invocations within one test (that is the whole point).
+    std::fs::create_dir_all(&dir).unwrap();
+    let client: ClientRef = std::sync::Arc::new(tokio::sync::Mutex::new(
+        LeantimeClient::new(url, "test-key").with_idempotency_dir(dir),
+    ));
+    let handler = &tool.handler;
+    handler(args, client).await
+}
+
 /// (is_error, parsed_json_or_raw_text) — error text has the "Error: " prefix stripped
 fn parse(r: &Value) -> (bool, Value) {
     let mut text = r["content"][0]["text"].as_str().unwrap_or("").to_string();
@@ -2349,4 +2365,270 @@ async fn list_tickets_unknown_status_label_errors_without_fetching() {
     assert!(msg.contains("3 (New)"), "{}", msg);
     assert!(msg.contains("0 (Done)"), "{}", msg);
     assert!(msg.contains("\"done\" and \"not_done\""), "{}", msg);
+}
+
+// ---------------------------------------------------------------- idempotency keys
+
+#[tokio::test]
+async fn idempotency_replay_returns_cached_result_without_second_write() {
+    let mut server = Server::new_async().await;
+    let users = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "L"}]),
+        ))
+        .create_async()
+        .await;
+    // exactly ONE mutation across both calls — the replay must not write
+    let mutation = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([777])))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let args =
+        json!({"projectId": "3", "headline": "Once", "editorId": "1", "idempotencyKey": "op-42"});
+    let first = call_idem(
+        "leantime_create_ticket",
+        args.clone(),
+        &server.url(),
+        "replay",
+    )
+    .await;
+    let (is_err, parsed) = parse(&first);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["id"], json!(777));
+    assert!(
+        parsed.get("idempotentReplay").is_none(),
+        "first run is not a replay"
+    );
+
+    let second = call_idem("leantime_create_ticket", args, &server.url(), "replay").await;
+    let (is_err, replayed) = parse(&second);
+    assert!(!is_err, "{:?}", replayed);
+    assert_eq!(replayed["id"], json!(777));
+    assert_eq!(replayed["idempotentReplay"], json!(true));
+
+    mutation.assert(); // one write, not two
+    users.assert();
+}
+
+#[tokio::test]
+async fn idempotency_failed_mutation_does_not_consume_the_key() {
+    let mut server = Server::new_async().await;
+    let _users = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "L"}]),
+        ))
+        .create_async()
+        .await;
+    // first attempt: server error → key NOT journaled; retry executes
+    let _fail = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(500)
+        .with_body("boom")
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([888])))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let args = json!({"projectId": "3", "headline": "Retry me", "editorId": "1", "idempotencyKey": "op-43"});
+    let first = call_idem(
+        "leantime_create_ticket",
+        args.clone(),
+        &server.url(),
+        "failretry",
+    )
+    .await;
+    assert!(parse(&first).0, "first attempt must fail (HTTP 500)");
+
+    let second = call_idem("leantime_create_ticket", args, &server.url(), "failretry").await;
+    let (is_err, parsed) = parse(&second);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["id"], json!(888));
+    ok.assert();
+}
+
+#[tokio::test]
+async fn idempotency_key_reused_across_tools_is_an_error() {
+    let mut server = Server::new_async().await;
+    let users = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "L"}]),
+        ))
+        .create_async()
+        .await;
+    let _create = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([5])))
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Journal the key under create_ticket…
+    call_idem(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "A", "editorId": "1", "idempotencyKey": "shared"}),
+        &server.url(),
+        "mismatch",
+    )
+    .await;
+    // …then reuse it under create_milestone — must be refused, no write.
+    let r = call_idem(
+        "leantime_create_milestone",
+        json!({"projectId": "3", "headline": "M", "editorId": "1", "idempotencyKey": "shared"}),
+        &server.url(),
+        "mismatch",
+    )
+    .await;
+    let (is_err, text) = parse(&r);
+    assert!(is_err);
+    let msg = text.as_str().unwrap_or_default();
+    assert!(
+        msg.contains("already used by leantime_create_ticket"),
+        "{}",
+        msg
+    );
+    _create.assert(); // still exactly one mutation overall
+    users.assert();
+}
+
+#[tokio::test]
+async fn idempotency_dry_run_does_not_consume_the_key() {
+    let mut server = Server::new_async().await;
+    let _users = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "L"}]),
+        ))
+        .create_async()
+        .await;
+    let mutation = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([9])))
+        .expect(1) // the dry-run makes no mutation call; the real one executes once
+        .create_async()
+        .await;
+
+    // dry-run with the key: validates, writes nothing, does not consume it
+    let dr = call_idem("leantime_create_ticket",
+        json!({"projectId": "3", "headline": "X", "editorId": "1", "idempotencyKey": "dry", "dryRun": true}),
+        &server.url(), "dryrun").await;
+    let (is_err, parsed) = parse(&dr);
+    assert!(!is_err && parsed["dryRun"] == json!(true), "{:?}", parsed);
+
+    // real call with the same key: executes (the dry-run consumed nothing)
+    let real = call_idem(
+        "leantime_create_ticket",
+        json!({"projectId": "3", "headline": "X", "editorId": "1", "idempotencyKey": "dry"}),
+        &server.url(),
+        "dryrun",
+    )
+    .await;
+    let (is_err, parsed) = parse(&real);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["id"], json!(9));
+    mutation.assert();
+}
+
+#[tokio::test]
+async fn idempotency_bulk_create_replays_whole_batch() {
+    let mut server = Server::new_async().await;
+    let users = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!([{"id": "1", "firstname": "Ada", "lastname": "L"}]),
+        ))
+        .create_async()
+        .await;
+    let mutation = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([31])))
+        .expect(2) // two items in the batch — once. The replay adds nothing.
+        .create_async()
+        .await;
+
+    let args = json!({"projectId": "3", "idempotencyKey": "batch-1", "tickets": [
+        {"headline": "T1", "editorId": "1"},
+        {"headline": "T2", "editorId": "1"}
+    ]});
+    let first = call_idem(
+        "leantime_bulk_create_tickets",
+        args.clone(),
+        &server.url(),
+        "bulk",
+    )
+    .await;
+    let (is_err, parsed) = parse(&first);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["summary"]["created"], json!(2));
+
+    let second = call_idem("leantime_bulk_create_tickets", args, &server.url(), "bulk").await;
+    let (is_err, replayed) = parse(&second);
+    assert!(!is_err, "{:?}", replayed);
+    assert_eq!(replayed["idempotentReplay"], json!(true));
+    assert_eq!(replayed["summary"]["created"], json!(2));
+    mutation.assert();
+    users.assert();
 }

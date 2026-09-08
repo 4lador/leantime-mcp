@@ -197,10 +197,14 @@ async fn serve() {
         eprintln!("{}", w);
     }
 
-    let client = std::sync::Arc::new(tokio::sync::Mutex::new(client::LeantimeClient::new(
-        &env.url,
-        &env.api_key,
-    )));
+    // Idempotency journal base: the resolved instance profile dir, or the
+    // keyring root when the server runs on pure env credentials.
+    let idem_base = config::active_instance()
+        .map(|n| config::instance_dir(&n))
+        .unwrap_or_else(config::secret_dir);
+    let client = std::sync::Arc::new(tokio::sync::Mutex::new(
+        client::LeantimeClient::new(&env.url, &env.api_key).with_idempotency_dir(idem_base),
+    ));
     let registry = tools::create_registry();
 
     // Load disabled tools and partition the registry. Disabled tools are

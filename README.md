@@ -40,6 +40,7 @@ An example session (abridged):
 - 42 tools: projects, tickets, subtasks, milestones, sprints, comments, time tracking, bulk operations
 - `leantime_project_context` — the whole project picture in one call (progress, health, sprint, milestones), under 4 KB
 - `dryRun: true` on every mutation — same validations, `from → to` diffs on updates, no write requests
+- `idempotencyKey` on creation tools — a retried call with an already-succeeded key replays the original result instead of writing a duplicate
 - Bulk operations up to 50 items, validated upfront (all-or-nothing on creates)
 - Backup & restore — snapshot a project to local JSON, rebuild it into a new project
 - Adaptive rate-limit retries, transparent to agents

@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.7.0 — 2026-09-08
+
+### Added
+
+- **Idempotency keys** on the creation tools (`leantime_create_ticket`, `leantime_create_milestone`, `leantime_create_sprint`, `leantime_add_comment`, `leantime_log_time`, `leantime_bulk_create_tickets`): an optional `idempotencyKey` lets an agent retry a call whose response was lost on its side (harness timeout, session restart, retry loop) — a retried call with an already-succeeded key returns the original result, marked `idempotentReplay: true`, without writing again. A key is scoped to (instance, tool, key); reusing it across tools is refused with an actionable error. Failed mutations do not consume their key, and dry runs ignore keys entirely. The journal lives per instance profile (`idempotency.json`, 0600, atomic writes, TTL 7 days via `LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS`, capped at 10k live entries) and survives process restarts. Honest scope, documented: keys cover agent-driven retries, not `Ambiguous` 5xx outcomes (a lost server response leaves nothing to journal — those still say "verify before retrying").
+- **Contract tests against Leantime `:latest`** (CI): the docker-compose image is parameterized and a new `local-e2e-latest` job runs the exhaustive e2e suite against the latest Leantime release for API drift detection — informative during the baseline phase (`continue-on-error`, failure log uploaded as an artifact), to be hardened once stable.
+
 ## v2.6.0 — 2026-09-08
 
 ### Fixed

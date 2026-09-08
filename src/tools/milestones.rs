@@ -42,6 +42,13 @@ fn h_get_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
 fn h_create_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_create_milestone") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
+
         let users = match get_users_simplified(&mut c).await {
             Ok(u) => u,
             Err(e) => return error_result(&e),
@@ -87,7 +94,15 @@ fn h_create_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
                     return error_result(&leantime_error_msg(&r));
                 }
                 let id = r.as_array().and_then(|x| x.first()).cloned().unwrap_or(r);
-                ok_result(&json!({ "id": id }))
+                let result = json!({ "id": id });
+                if let Some(w) =
+                    idempotency_note(&c, idem_key, "leantime_create_milestone", &result)
+                {
+                    let mut warned = result;
+                    warned["idempotencyWarning"] = json!(w);
+                    return ok_result(&warned);
+                }
+                ok_result(&result)
             }
             Err(e) => error_result(&e.to_string()),
         }
@@ -308,7 +323,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_get_milestone", "Get details of a specific milestone",
             vec![rs("projectId", "The project ID"), rs("milestoneId", "The milestone ID")], vec!["projectId", "milestoneId"], Box::new(h_get_milestone)),
         tool_with_annotations("leantime_create_milestone", format!("Create a milestone in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned. Call directly when the user explicitly provided every value. Prefer dryRun: true first when you chose or inferred any value (type, priority, dates…) — show the proposed fields and ask for confirmation before executing.", md, assignment),
-            vec![rs("projectId", "The project ID"), rs("headline", "Milestone title"), os("description", format!("Milestone description in {}", md)), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned milestone"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependentMilestone", "Parent milestone ID"), ob("dryRun", DRY_RUN_DESC)],
+            vec![rs("projectId", "The project ID"), rs("headline", "Milestone title"), os("description", format!("Milestone description in {}", md)), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned milestone"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependentMilestone", "Parent milestone ID"), ob("dryRun", DRY_RUN_DESC), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["projectId", "headline"], Box::new(h_create_milestone), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_milestone", format!("Update an existing milestone. Only the provided fields are changed (Leantime's patch API — only the provided fields change). The description is {}. Call directly when every value was explicitly given or resolves unambiguously. Prefer dryRun: true first when you interpreted the request or chose values yourself — show the from → to diff and ask for confirmation before executing.", md),
             vec![rs("milestoneId", "The milestone ID"), os("headline", "New milestone title"), os("description", format!("New description in {}", md)), os("editorId", "New assigned user ID (validates against leantime_list_users)"), on("status", "New status ID"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependentMilestone", "New parent milestone ID"), ob("dryRun", DRY_RUN_DESC)],

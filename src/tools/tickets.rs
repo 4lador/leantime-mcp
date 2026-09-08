@@ -170,6 +170,13 @@ fn h_get_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> +
 fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_create_ticket") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
+
         let users = match get_users_simplified(&mut c).await {
             Ok(u) => u,
             Err(e) => return error_result(&e),
@@ -225,7 +232,13 @@ fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
                     return error_result(&leantime_error_msg(&r));
                 }
                 let id = r.as_array().and_then(|x| x.first()).cloned().unwrap_or(r);
-                ok_result(&json!({ "id": id }))
+                let result = json!({ "id": id });
+                if let Some(w) = idempotency_note(&c, idem_key, "leantime_create_ticket", &result) {
+                    let mut warned = result;
+                    warned["idempotencyWarning"] = json!(w);
+                    return ok_result(&warned);
+                }
+                ok_result(&result)
             }
             Err(e) => error_result(&e.to_string()),
         }
@@ -439,7 +452,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_get_ticket", "Get details of a specific ticket/task",
             vec![rs("projectId", "The project ID"), rs("ticketId", "The ticket ID")], vec!["projectId", "ticketId"], Box::new(h_get_ticket)),
         tool_with_annotations("leantime_create_ticket", format!("Create a new ticket/task in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned. Call directly when the user explicitly provided every value. Prefer dryRun: true first when you chose or inferred any value (type, priority, dates…) — show the proposed fields and ask for confirmation before executing.", md, assignment),
-            vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC)],
+            vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["projectId", "headline"], Box::new(h_create_ticket), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_ticket", format!("Update an existing ticket/task. Only the provided fields are changed (Leantime's patch API — only the provided fields change). The description is {} and replaces the previous description entirely. Only set editorId when you intend to change the assignment (validate user IDs with leantime_list_users). Call directly when every value was explicitly given or resolves unambiguously. Prefer dryRun: true first when you interpreted the request or chose values yourself — show the from → to diff and ask for confirmation before executing.", md),
             vec![rs("ticketId", "The ticket ID"), os("headline", "New ticket title"), os("description", format!("New description in {}", md)), os("type", "New ticket type"), on("status", "New status ID"), on("priority", "New priority (1-5)"), os("milestoneId", "New milestone ID"), os("sprintId", "New sprint ID"), os("editorId", "New assigned user ID (validates against leantime_list_users)"), os("tags", "New comma-separated tags"), os("storypoints", "New story points"), os("dateToFinish", "New due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC)],

@@ -27,6 +27,8 @@ pub mod config;
 pub mod doctor;
 /// Harness (MCP client) config writers.
 pub mod harness;
+/// Idempotency journal for mutation retries.
+pub mod idempotency;
 /// Deterministic Markdown → TipTap-compatible HTML converter.
 pub mod markdown;
 /// Project restore from backup files.

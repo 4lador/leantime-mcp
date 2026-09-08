@@ -64,6 +64,10 @@ pub struct LeantimeClient {
     discovered_rate_limit: Option<u32>,
     status_cache: std::collections::HashMap<String, Value>,
     user_cache: Option<(Vec<Value>, std::time::Instant)>,
+    /// Base directory of the idempotency journal (instance profile dir).
+    /// `None` until configured — handlers refuse `idempotencyKey` calls
+    /// rather than silently skipping the journal.
+    idempotency_dir: Option<std::path::PathBuf>,
 }
 
 /// Stable identity key for a ticket across fetches — ids arrive as strings
@@ -325,7 +329,19 @@ impl LeantimeClient {
             discovered_rate_limit: None,
             status_cache: std::collections::HashMap::new(),
             user_cache: None,
+            idempotency_dir: None,
         }
+    }
+
+    /// Pin the idempotency journal to an instance profile directory.
+    pub fn with_idempotency_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.idempotency_dir = Some(dir.into());
+        self
+    }
+
+    /// The configured journal base directory, if any.
+    pub fn idempotency_dir(&self) -> Option<&std::path::Path> {
+        self.idempotency_dir.as_deref()
     }
 
     /// Call a Leantime JSON-RPC method (`method` without the `leantime.rpc.` prefix).

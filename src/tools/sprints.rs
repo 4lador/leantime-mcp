@@ -24,6 +24,12 @@ fn h_create_sprint(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
     Box::pin(async move {
         let mut c = cl.lock().await;
         let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_create_sprint") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
         // addSprint defaults projectId to the session's current project, which is
         // NOT set for API keys — always pass it explicitly.
         match c.call("sprints.addSprint", json!({"params": {
@@ -33,7 +39,13 @@ fn h_create_sprint(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
                 if is_leantime_error(&r) { return error_result(&leantime_error_msg(&r)); }
                 if r == json!(false) || r.is_null() { return error_result(&format!("Sprint creation failed for project {}.", pid)); }
                 let id = r.as_array().and_then(|x| x.first()).cloned().unwrap_or(r);
-                ok_result(&json!({ "id": id, "projectId": pid }))
+                let result = json!({ "id": id, "projectId": pid });
+                if let Some(w) = idempotency_note(&c, idem_key, "leantime_create_sprint", &result) {
+                    let mut warned = result;
+                    warned["idempotencyWarning"] = json!(w);
+                    return ok_result(&warned);
+                }
+                ok_result(&result)
             }
             Err(e) => error_result(&e.to_string()),
         }
@@ -139,7 +151,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_list_sprints", "List all sprints for a project",
             vec![rs("projectId", "The project ID")], vec!["projectId"], Box::new(h_list_sprints)),
         tool_with_annotations("leantime_create_sprint", "Create a sprint in a project",
-            vec![rs("projectId", "The project ID"), rs("name", "Sprint name"), rs("startDate", "Start date, YYYY-MM-DD"), rs("endDate", "End date, YYYY-MM-DD")],
+            vec![rs("projectId", "The project ID"), rs("name", "Sprint name"), rs("startDate", "Start date, YYYY-MM-DD"), rs("endDate", "End date, YYYY-MM-DD"), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["projectId", "name", "startDate", "endDate"], Box::new(h_create_sprint), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_sprint", "Update a sprint (name and/or dates)",
             vec![rs("sprintId", "The sprint ID"), os("name", "New sprint name"), os("startDate", "New start date, YYYY-MM-DD"), os("endDate", "New end date, YYYY-MM-DD")],

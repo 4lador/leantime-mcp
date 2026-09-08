@@ -11,6 +11,49 @@ pub(super) const MARKDOWN_HINT: &str = "Markdown (## headings, lists, - [ ] chec
 /// Assignment rule shown to agents on create tools.
 pub(super) const ASSIGNMENT_HINT: &str =
     "You MUST ask the user who to assign to. Pass editorId or unassigned: true.";
+/// Schema description of the `idempotencyKey` parameter (mutation creates).
+pub(super) const IDEMPOTENCY_HINT: &str = "Reuse the same key to safely retry this exact call — a retried call with an already-succeeded key returns the original result without writing again. Generate a fresh key for each new logical operation";
+
+/// Idempotency gate for mutation handlers: `Ok(None)` = proceed (miss or no
+/// key), `Ok(Some(env))` = replay — return it directly, `Err(msg)` =
+/// actionable error (invalid key, or key already used by another tool).
+pub(super) fn idempotency_check(
+    c: &LeantimeClient,
+    key: Option<&str>,
+    tool: &'static str,
+) -> Result<Option<Value>, String> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    crate::idempotency::validate_key(key)?;
+    match crate::idempotency::lookup(c.idempotency_dir(), key, tool) {
+        crate::idempotency::Lookup::Hit(mut result) => {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("idempotentReplay".into(), Value::Bool(true));
+            }
+            Ok(Some(result))
+        }
+        crate::idempotency::Lookup::Mismatch(other) => Err(format!(
+            "idempotencyKey \"{}\" was already used by {} — use a fresh key for each new logical operation",
+            key, other
+        )),
+        crate::idempotency::Lookup::Miss => Ok(None),
+    }
+}
+
+/// Record a successful result under the key. Returns a warning string on
+/// journal failure — the mutation succeeded, so a journal issue must not
+/// fail the response.
+pub(super) fn idempotency_note(
+    c: &LeantimeClient,
+    key: Option<&str>,
+    tool: &'static str,
+    result: &Value,
+) -> Option<String> {
+    let key = key?;
+    crate::idempotency::record(c.idempotency_dir(), key, tool, result).err()
+}
+
 /// Rate-limit note shown on bulk tools.
 pub(super) const RATE_LIMIT_NOTE: &str = "The server transparently retries on 429 rate limits. On low-limit instances (10 req/min default), large batches may take several minutes.";
 

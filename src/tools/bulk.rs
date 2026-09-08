@@ -59,6 +59,12 @@ fn build_create_payload(pid_num: &Value, t: &Value) -> Value {
 fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_bulk_create_tickets") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
         let pid = a.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
         let tickets = a
             .get("tickets")
@@ -176,7 +182,13 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 }
             }
         }
-        ok_result(&bulk_summary(results))
+        let summary = bulk_summary(results);
+        if let Some(w) = idempotency_note(&c, idem_key, "leantime_bulk_create_tickets", &summary) {
+            let mut warned = summary;
+            warned["idempotencyWarning"] = json!(w);
+            return ok_result(&warned);
+        }
+        ok_result(&summary)
     })
 }
 
@@ -387,7 +399,7 @@ pub(super) fn tools() -> Vec<Tool> {
     let rate = RATE_LIMIT_NOTE;
     vec![
         tool_with_annotations("leantime_bulk_create_tickets", format!("Create multiple tickets in one call (max {}). ALL items are validated BEFORE anything is created — if any item fails validation (missing assignment, unknown editorId), nothing is created. Descriptions are Markdown, converted to rich HTML per ticket. Each item requires editorId or unassigned: true. ALWAYS call with dryRun: true first — validate the whole batch and show the per-item preview, then execute on approval.{}", MAX_BATCH, rate),
-            vec![rs("projectId", "The project ID"), ("tickets".to_string(), json!({"type": "array", "description": format!("Array of ticket specifications (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH})), ob("dryRun", DRY_RUN_DESC)],
+            vec![rs("projectId", "The project ID"), ("tickets".to_string(), json!({"type": "array", "description": format!("Array of ticket specifications (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH})), ob("dryRun", DRY_RUN_DESC), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["projectId", "tickets"], Box::new(h_bulk_create), ToolAnnotations::write()),
         tool_with_annotations("leantime_bulk_update_tickets", format!("Update multiple tickets in one call (max {}). Uses the patch API — only provided fields change. Results are per-item: some may succeed while others fail. ALWAYS call with dryRun: true first — validate the whole batch and show the per-item preview, then execute on approval.{}", MAX_BATCH, rate),
             vec![rs("projectId", "The project ID"), ("updates".to_string(), json!({"type": "array", "description": format!("Array of ticket updates (max {})", MAX_BATCH), "minItems": 1, "maxItems": MAX_BATCH})), ob("dryRun", DRY_RUN_DESC)],

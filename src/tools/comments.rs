@@ -32,6 +32,12 @@ fn h_add_comment(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
         let text = a.get("text").and_then(|v| v.as_str()).unwrap_or("");
         let father = a.get("father").and_then(|v| v.as_i64()).unwrap_or(0);
         let html = markdown_to_html(text);
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_add_comment") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
         // addComment requires the full `entity` object — rebuild it from the ticket.
         let ticket = match c.call("tickets.getTicket", json!({"id": tid})).await {
             Ok(t) => t,
@@ -65,7 +71,13 @@ fn h_add_comment(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 return error_result(&add.err().unwrap().to_string());
             }
         }
-        ok_result(&json!({ "ok": true, "ticketId": tid }))
+        let result = json!({ "ok": true, "ticketId": tid });
+        if let Some(w) = idempotency_note(&c, idem_key, "leantime_add_comment", &result) {
+            let mut warned = result;
+            warned["idempotencyWarning"] = json!(w);
+            return ok_result(&warned);
+        }
+        ok_result(&result)
     })
 }
 
@@ -110,7 +122,7 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("leantime_list_comments", "List the discussion comments of a ticket",
             vec![rs("ticketId", "The ticket ID")], vec!["ticketId"], Box::new(h_list_comments)),
         tool_with_annotations("leantime_add_comment", format!("Add a comment to a ticket's discussion. The text is {}.", md),
-            vec![rs("ticketId", "The ticket ID"), rs("text", format!("Comment body in {}", md)), ("father".to_string(), json!({"type": "number", "description": "Parent comment ID for a reply (omit or 0 for a top-level comment)", "optional": true}))],
+            vec![rs("ticketId", "The ticket ID"), rs("text", format!("Comment body in {}", md)), ("father".to_string(), json!({"type": "number", "description": "Parent comment ID for a reply (omit or 0 for a top-level comment)", "optional": true})), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["ticketId", "text"], Box::new(h_add_comment), ToolAnnotations::write()),
         tool_with_annotations("leantime_update_comment", format!("Edit an existing comment. The text is {}.", md),
             vec![rs("commentId", "The comment ID"), rs("text", format!("New comment body in {}", md))],

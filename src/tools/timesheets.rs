@@ -98,6 +98,13 @@ fn h_log_time(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + S
             params["description"] = json!(d);
         }
 
+        let idem_key = a.get("idempotencyKey").and_then(|v| v.as_str());
+        match idempotency_check(&c, idem_key, "leantime_log_time") {
+            Ok(Some(replay)) => return ok_result(&replay),
+            Ok(None) => {}
+            Err(e) => return error_result(&e),
+        }
+
         match c
             .call(method, json!({"ticketId": tid, "params": params}))
             .await
@@ -109,6 +116,9 @@ fn h_log_time(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + S
                 let mut echo = json!({ "ok": true, "ticketId": tid, "mode": mode });
                 for (k, v) in params.as_object().unwrap() {
                     echo[k] = v.clone();
+                }
+                if let Some(w) = idempotency_note(&c, idem_key, "leantime_log_time", &echo) {
+                    echo["idempotencyWarning"] = json!(w);
                 }
                 ok_result(&echo)
             }
@@ -204,7 +214,7 @@ fn h_delete_timesheet(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
 pub(super) fn tools() -> Vec<Tool> {
     vec![
         tool_with_annotations("leantime_log_time", "Log time on a ticket. mode \"add\" accumulates hours (default); mode \"set\" is idempotent (sets the total for that day/kind).",
-            vec![rs("ticketId", "The ticket ID"), rn("hours", "Hours to log (duration in decimal hours, max 24 — one entry covers a single day; split across days beyond that)"), os("kind", "Hour type (GENERAL_BILLABLE, GENERAL_NOT_BILLABLE, PROJECTMANAGEMENT, DEVELOPMENT, BUGFIXING_NOT_BILLABLE, TESTING; default GENERAL_BILLABLE)"), os("date", "Work date, YYYY-MM-DD (default today)"), os("description", "What was done"), os("mode", "add = accumulate (logTime), set = idempotent total (upsertTime). Default \"add\""), ob("dryRun", DRY_RUN_DESC)],
+            vec![rs("ticketId", "The ticket ID"), rn("hours", "Hours to log (duration in decimal hours, max 24 — one entry covers a single day; split across days beyond that)"), os("kind", "Hour type (GENERAL_BILLABLE, GENERAL_NOT_BILLABLE, PROJECTMANAGEMENT, DEVELOPMENT, BUGFIXING_NOT_BILLABLE, TESTING; default GENERAL_BILLABLE)"), os("date", "Work date, YYYY-MM-DD (default today)"), os("description", "What was done"), os("mode", "add = accumulate (logTime), set = idempotent total (upsertTime). Default \"add\""), ob("dryRun", DRY_RUN_DESC), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["ticketId", "hours"], Box::new(h_log_time), ToolAnnotations::write()),
         tool("leantime_get_ticket_time", "Get time booked on a ticket: total hours and per-day breakdown",
             vec![rs("ticketId", "The ticket ID")], vec!["ticketId"], Box::new(h_get_ticket_time)),
