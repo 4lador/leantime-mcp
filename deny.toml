@@ -1,10 +1,9 @@
 # cargo-deny configuration — minimal and permissive: flag advisories and
-# unmaintained crates; licenses and sources stay informational for now.
+# yanked crates; licenses and sources stay informational for now.
 [advisories]
 yanked = "warn"
 
 [licenses]
-unlicensed = "warn"
 allow = ["MIT", "Apache-2.0", "ISC", "Unicode-3.0", "BSD-3-Clause", "0BSD"]
 
 [sources]
