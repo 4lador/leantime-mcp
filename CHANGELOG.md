@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.6.0 — 2026-09-08
+
+### Fixed
+
+- **A transient 5xx after a mutation no longer triggers a blind retry.** The HTTP retry layer is now method-aware (default-deny): reads (a whitelist of 17 known read-only RPC methods) retry on 429 and transient 502/503/504 as before, while mutations retry on 429 only — a 502/503/504 after a mutation surfaces immediately as an explicit `Ambiguous` error ("the change may or may not have been applied; verify before retrying"). Previously the server could duplicate a mutation whose response was lost at the gateway. Found by extending an external audit's idempotency point at our own retry layer.
+
+### Changed
+
+- **Documentation honesty pass**: every verifiable absolute claim was reworded as a present-tense mechanism (new CONTRIBUTING convention). Pagination is now described as a best-effort snapshot, not atomic — the previous "never losses" formulation was stronger than the analysis supports. Restore is described by its mechanism (writes into a newly created project) rather than "zero risk". Removed a `--preset readonly` flag reference that never existed, removed stale test counts, qualified performance figures (Linux x86_64 dev machine, n=100), and added a trademark disclaimer (independent, unofficial integration). The four update-tool descriptions, the restore CLI help and module docstrings follow the same convention.
+- **README restructured as a landing page** (422 → 277 lines), following patterns studied from ripgrep, fd and github-mcp-server: honest pitch, example agent session, one-liner features, quick start with a compressed harness table, exhaustive lists collapsed into `<details>`, a new Troubleshooting section, and a "Why this isn't for you" honesty section. Deep content moved to `docs/harness-setup.md` and `docs/backup-restore.md` — both ship inside the crate so relative links work on crates.io.
+
 ## v2.5.4 — 2026-09-08
 
 ### Changed
