@@ -19,12 +19,14 @@ name = "leantmcp"
 name = "leantmcp"
 path = "src/main.rs"
 
-# Distribution-channel files stay out of the crate tarball.
+# Distribution-channel files stay out of the crate tarball. Cargo matches
+# glob patterns against full file paths (not gitignore directory rules),
+# hence the /** forms.
 exclude = [
-    "docs/",
-    ".github/",
+    "docs/**",
+    ".github/**",
     "docker-compose.yml",
-    "scripts/",
+    "scripts/**",
     "install.sh",
     "install.ps1",
 ]
