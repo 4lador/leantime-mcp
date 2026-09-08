@@ -5,8 +5,10 @@
   "description": "Unofficial MCP server for Leantime: 42 agent-first tools, backup/restore, dry-run validation",
   "repository": {
     "url": "https://github.com/4lador/leantime-mcp",
-    "source": "github"
+    "source": "github",
+    "id": "1226618766"
   },
+  "websiteUrl": "https://github.com/4lador/leantime-mcp",
   "version": "2.5.0",
   "packages": [
     {
