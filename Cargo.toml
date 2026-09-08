@@ -10,15 +10,6 @@ readme = "README.md"
 keywords = ["leantime", "mcp", "model-context-protocol", "project-management"]
 categories = ["command-line-utilities", "development-tools"]
 
-# The installed binary keeps its short name (leantmcp) — harness configs
-# point at ~/.local/bin/leantmcp and must never break on a rename.
-[lib]
-name = "leantmcp"
-
-[[bin]]
-name = "leantmcp"
-path = "src/main.rs"
-
 # Distribution-channel files stay out of the crate tarball. Cargo matches
 # glob patterns against full file paths (not gitignore directory rules),
 # hence the /** forms.
@@ -30,6 +21,15 @@ exclude = [
     "install.sh",
     "install.ps1",
 ]
+
+# The installed binary keeps its short name (leantmcp) — harness configs
+# point at ~/.local/bin/leantmcp and must never break on a rename.
+[lib]
+name = "leantmcp"
+
+[[bin]]
+name = "leantmcp"
+path = "src/main.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
