@@ -24,7 +24,10 @@ services:
       retries: 30
 
   leantime:
-    image: leantime/leantime:3.7.3
+    # Parameterized for contract testing: CI runs the exhaustive e2e suite
+    # against both this pinned version (required) and :latest (drift
+    # detection). Local dev gets the pinned default.
+    image: ${LEANTIME_IMAGE:-leantime/leantime:3.7.3}
     depends_on:
       leantime-db:
         condition: service_healthy
