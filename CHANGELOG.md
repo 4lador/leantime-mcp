@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.5.2 — 2026-09-08
+
+### Changed
+
+- **CI verification release** — no functional changes. First end-to-end run of the tag-triggered `publish` job (crates.io via keyless trusted publishing, MCP Registry via OIDC). Exists to prove the automation before a genuine release depends on it.
+
 ## v2.5.1 — 2026-09-08
 
 ### Changed
