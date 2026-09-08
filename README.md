@@ -91,6 +91,12 @@ irm https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.ps1 | iex
 
 Both installers verify the published SHA-256 checksum before installing and abort on mismatch. Release binaries cover **all 5 targets** — Linux (x86_64, aarch64), Windows x86_64 and macOS (Intel, ARM) — on the [releases page](https://github.com/4lador/leantime-mcp/releases).
 
+**Via cargo** (requires the Rust toolchain):
+
+```bash
+cargo install leantime-mcp   # installs the leantmcp binary to ~/.cargo/bin
+```
+
 **From source:**
 
 ```bash
