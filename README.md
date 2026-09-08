@@ -41,6 +41,9 @@ An example session (abridged):
 - `leantime_project_context` — the whole project picture in one call (progress, health, sprint, milestones), under 4 KB
 - `dryRun: true` on every mutation — same validations, `from → to` diffs on updates, no write requests
 - `idempotencyKey` on creation tools — a retried call with an already-succeeded key replays the original result instead of writing a duplicate
+- Result envelopes: structured `truncated` on capped lists, `changed`/`unchanged` diffs on updates — agents see what a call actually did
+- `LEANTIME_MCP_PROFILE=readonly` — a server-wide execution profile that removes write capabilities entirely
+- Backup retention (`LEANTIME_MCP_BACKUP_RETENTION_DAYS`), atomic backup writes, and a restore manifest mapping every old→new id
 - Bulk operations up to 50 items, validated upfront (all-or-nothing on creates)
 - Backup & restore — snapshot a project to local JSON, rebuild it into a new project
 - Adaptive rate-limit retries, transparent to agents

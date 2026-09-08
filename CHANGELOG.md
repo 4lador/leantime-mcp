@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.8.0 — 2026-09-08
+
+### Added
+
+- **Result envelopes**: `leantime_list_tickets` at the 500-result cap returns `{tickets, returned, truncated: true}` — a structured boolean an LLM cannot miss, replacing the textual note. `leantime_update_ticket` and `leantime_update_milestone` responses gain `changed` (field, from, to, status label), `unchanged` (fields already at their target) and `warnings` — computed from a pre-patch read of the live entity, so the agent sees what actually changed rather than a raw ok/id. Additive: existing consumers see new fields, nothing moved.
+- **`LEANTIME_MCP_PROFILE=readonly`** — execution-level capability filter: write and destructive handlers are removed at registry construction (they do not exist in the process, not merely hidden). Defense in depth with per-instance `tools.json` and `DESTRUCTIVE_POLICY`. A per-process leash, not an instance lock.
+- **Backup retention** (`LEANTIME_MCP_BACKUP_RETENTION_DAYS`, default 0 = keep everything): after a validated backup (re-read and re-parsed from disk), same-project backups older than the window are purged with a summary; validation failure skips the purge — the previous generation stays. Backup writes are now atomic (temp + rename). CLI adds `--prune` (global manual purge) and `--output DIR`. The `docs/backup-restore.md` guide documents retention and the optional `age` encryption workflow (asymmetric: the backup machine holds only a public recipient).
+- **Restore manifest**: after a successful restore, a `<backup>.restore-manifest.json` lands next to the source — target project, counts, and the full old→new id mapping (sorted for stable diffs). Restores are auditable after the fact.
+- **Supply-chain CI**: a dedicated `audit` job runs RustSec advisories (cargo-audit) and cargo-deny (permissive `deny.toml`: vulnerabilities denied, unmaintained/yanked warned).
+
 ## v2.7.0 — 2026-09-08
 
 ### Added
