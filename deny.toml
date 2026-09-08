@@ -1,10 +1,7 @@
-# cargo-deny configuration — permissive by design: flag advisories and
+# cargo-deny configuration — minimal and permissive: flag advisories and
 # unmaintained crates; licenses and sources stay informational for now.
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
 yanked = "warn"
-notice = "warn"
 
 [licenses]
 unlicensed = "warn"
@@ -14,4 +11,3 @@ allow = ["MIT", "Apache-2.0", "ISC", "Unicode-3.0", "BSD-3-Clause", "0BSD"]
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
