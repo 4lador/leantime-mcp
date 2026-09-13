@@ -82,7 +82,7 @@ fn h_update_project(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Valu
             .call("projects.patch", json!({"id": id, "params": params}))
             .await
         {
-            Ok(r) => ok_result(&json!({ "ok": r == json!(true), "id": id })),
+            Ok(r) => ok_result(&json!({ "ok": mutation_ok(&r), "id": id })),
             Err(e) => error_result(&e.to_string()),
         }
     })

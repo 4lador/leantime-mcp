@@ -261,7 +261,10 @@ async fn local_e2e_exhaustive() {
             }),
         )
         .await;
-    let sprint = e.capture("tickets", ok(&r, "create_sprint").parsed["id"].clone());
+    // Sprints are NOT tickets (zp_sprints) and there is no delete_sprint tool —
+    // they are torn down with the scratch project. Capturing a sprint id into
+    // the ticket set made cleanup delete_ticket() a random unrelated id.
+    let sprint = id_str(&ok(&r, "create_sprint").parsed["id"]);
     e.sprint = Some(sprint.clone());
 
     ok(
@@ -332,13 +335,21 @@ async fn local_e2e_exhaustive() {
         .unwrap_or(false);
     assert!(all_milestones, "list_milestones returned a non-milestone");
 
-    ok(
+    let upd = ok(
         &e.call(
             "leantime_update_milestone",
             json!({"milestoneId": milestone, "headline": "Jalon e2e renamed"}),
         )
         .await,
         "update_milestone",
+    )
+    .parsed
+    .clone();
+    assert_eq!(
+        upd["ok"],
+        json!(true),
+        "update_milestone envelope must report ok — real patch responses are [true], not true: {}",
+        upd
     );
 
     let progress = ok(
@@ -415,13 +426,21 @@ async fn local_e2e_exhaustive() {
     assert_eq!(id_str(&t["editorId"]), "1");
 
     // Field-wiping regression: headline-only patch must NOT wipe editorId/sprint
-    ok(
+    let upd = ok(
         &e.call(
             "leantime_update_ticket",
             json!({"ticketId": ticket, "headline": "Ticket e2e renamed"}),
         )
         .await,
         "update_ticket",
+    )
+    .parsed
+    .clone();
+    assert_eq!(
+        upd["ok"],
+        json!(true),
+        "update_ticket envelope must report ok — real patch responses are [true], not true: {}",
+        upd
     );
     let t2 = ok(
         &e.call(

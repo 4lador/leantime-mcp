@@ -95,7 +95,7 @@ async fn update_project_sends_only_provided_fields() {
         ))
         .with_status(200)
         .with_header("Content-Type", "application/json")
-        .with_body(rpc_ok(json!(true)))
+        .with_body(rpc_ok(json!([true])))
         .create_async().await;
 
     let r = call(
@@ -137,7 +137,7 @@ async fn update_sprint_resends_full_field_set() {
         ))
         .with_status(200)
         .with_header("Content-Type", "application/json")
-        .with_body(rpc_ok(json!(true)))
+        .with_body(rpc_ok(json!([true])))
         .create_async()
         .await;
 
@@ -889,7 +889,7 @@ async fn update_ticket_sends_only_changed_fields() {
         ))
         .with_status(200)
         .with_header("Content-Type", "application/json")
-        .with_body(rpc_ok(json!(true)))
+        .with_body(rpc_ok(json!([true])))
         .create_async()
         .await;
 
@@ -910,6 +910,107 @@ async fn update_ticket_sends_only_changed_fields() {
     assert_eq!(changed[0]["from"], json!("Old"));
     assert_eq!(changed[0]["to"], json!("New"));
     m.assert();
+}
+
+// Real Leantime wire shapes (Jsonrpc.php wraps scalar service returns via
+// settype): success = [true], failure = [false]. Regression: the strict
+// `result == true` check used to report ok:false on every successful update.
+#[tokio::test]
+async fn update_ticket_patch_wrapped_false_reports_ok_false() {
+    let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "9"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "9", "projectId": "3", "headline": "Old", "status": "3"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+    let m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch", "params": {
+                "id": "9", "params": {"headline": "New"}
+            }})
+            .to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([false])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_update_ticket",
+        json!({"ticketId": "9", "headline": "New"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["ok"], json!(false));
+    m.assert();
+}
+
+#[tokio::test]
+async fn update_ticket_soft_error_reports_ok_false() {
+    let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "9"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "9", "projectId": "3", "headline": "Old", "status": "3"}),
+        ))
+        .create_async()
+        .await;
+    let _st = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getStatusLabels"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"3": {"name": "Done", "statusType": "DONE"}})))
+        .create_async()
+        .await;
+    let _m = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!({"msg": "no access", "type": "error"})))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_update_ticket",
+        json!({"ticketId": "9", "headline": "New"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["ok"], json!(false));
 }
 
 #[tokio::test]
@@ -1085,7 +1186,7 @@ async fn bulk_schedule_sends_sprint_and_dates_patch() {
         .match_body(mockito::Matcher::PartialJsonString(
             json!({"params": {"id": "9", "params": {"sprint": "2", "editFrom": "2026-01-05", "editTo": "2026-01-10"}}}).to_string()))
         .with_status(200).with_header("Content-Type", "application/json")
-        .with_body(rpc_ok(json!(true))).create_async().await;
+        .with_body(rpc_ok(json!([true]))).create_async().await;
 
     let r = call("leantime_bulk_schedule_tickets", json!({
         "projectId": "4",
@@ -2696,7 +2797,7 @@ async fn update_ticket_envelope_reports_changed_and_unchanged() {
         ))
         .with_status(200)
         .with_header("Content-Type", "application/json")
-        .with_body(rpc_ok(json!(true)))
+        .with_body(rpc_ok(json!([true])))
         .expect(1)
         .create_async()
         .await;

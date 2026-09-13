@@ -220,7 +220,7 @@ fn h_update_milestone(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Va
             .await
         {
             Ok(r) => ok_result(&json!({
-                "ok": r == json!(true),
+                "ok": mutation_ok(&r),
                 "id": mid,
                 "changed": changed,
                 "unchanged": unchanged,

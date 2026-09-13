@@ -329,7 +329,7 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 .await
             {
                 Ok(r) => {
-                    let ok = r == json!(true) || (r.is_array() && r[0] == json!(true));
+                    let ok = mutation_ok(&r);
                     results.push(json!({ "index": i + 1, "ok": ok, "id": tid }));
                 }
                 Err(e) => results.push(
@@ -379,7 +379,7 @@ fn h_bulk_schedule(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
                 .await
             {
                 Ok(r) => {
-                    let ok = r == json!(true) || (r.is_array() && r[0] == json!(true));
+                    let ok = mutation_ok(&r);
                     results.push(json!({ "index": i + 1, "ok": ok, "id": tid }));
                 }
                 Err(e) => results.push(

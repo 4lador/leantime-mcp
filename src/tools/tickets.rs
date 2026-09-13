@@ -379,7 +379,7 @@ fn h_update_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
             .await
         {
             Ok(r) => ok_result(&json!({
-                "ok": r == json!(true),
+                "ok": mutation_ok(&r),
                 "id": tid,
                 "changed": changed,
                 "unchanged": unchanged,

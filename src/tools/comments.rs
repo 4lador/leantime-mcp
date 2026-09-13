@@ -93,7 +93,7 @@ fn h_update_comment(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Valu
             )
             .await
         {
-            Ok(r) => ok_result(&json!({ "ok": r == json!(true), "commentId": id })),
+            Ok(r) => ok_result(&json!({ "ok": mutation_ok(&r), "commentId": id })),
             Err(e) => error_result(&e.to_string()),
         }
     })
@@ -110,7 +110,7 @@ fn h_delete_comment(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Valu
             .call("comments.deleteComment", json!({ "commentId": id }))
             .await
         {
-            Ok(r) => ok_result(&json!({ "deleted": r == json!(true), "commentId": id })),
+            Ok(r) => ok_result(&json!({ "deleted": mutation_ok(&r), "commentId": id })),
             Err(e) => error_result(&e.to_string()),
         }
     })

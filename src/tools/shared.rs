@@ -233,6 +233,23 @@ pub(super) fn leantime_error_msg(v: &Value) -> String {
         .to_string()
 }
 
+/// Interpret a mutation response as success/failure.
+///
+/// Leantime's JSON-RPC controller (`app/Domain/Api/Controllers/Jsonrpc.php`)
+/// funnels every service return through `settype($response, 'array')`, which
+/// wraps scalars in a single-element array: a successful `tickets.patch`
+/// comes back as `[true]` and a failure as `[false]` — never a bare `true`.
+/// Older/patched versions have also been seen returning plain scalars, so
+/// anything that is neither a Leantime soft error nor a (possibly wrapped)
+/// `false` counts as success.
+pub(super) fn mutation_ok(v: &Value) -> bool {
+    let effective = match v {
+        Value::Array(a) if a.len() == 1 => &a[0],
+        _ => v,
+    };
+    !(is_leantime_error(v) || effective == &Value::Bool(false))
+}
+
 /// Fetch the user list (cached 5 min) as simplified `(id, name)` pairs.
 pub(super) async fn get_users_simplified(
     c: &mut LeantimeClient,
