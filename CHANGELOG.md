@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.8.1 — 2026-09-13
+
+### Fixed
+
+- **Successful updates no longer report `ok: false`.** Leantime's JSON-RPC controller (`app/Domain/Api/Controllers/Jsonrpc.php`) funnels every service return through `settype($response, 'array')`, which wraps scalars in a single-element array — a successful `tickets.patch` comes back as `[true]` and a failure as `[false]`, never a bare `true`. The strict `result == true` comparison therefore reported `ok: false` on *every* successful `leantime_update_ticket`, `leantime_update_milestone`, `leantime_update_project`, `leantime_update_comment` and `leantime_delete_comment` (the bulk tools already unwrapped the array, which is why the e2e suite stayed green). All seven sites now share a `mutation_ok` helper that unwraps the wrapper and treats anything except a Leantime soft error (`{msg, type: "error"}`) or a (possibly wrapped) `false` as success — tolerant to version drift in either direction. Unit-test mocks now use the real wire shapes (`[true]`/`[false]`, plus a soft-error case) instead of the assumed bare `true`, and the exhaustive e2e asserts `ok == true` on `update_ticket`/`update_milestone` envelopes — the blind spot that let this ship. Found dogfooding: an agent closed two tickets, saw `ok: false`, and wrote it off as cosmetic.
+- **E2e cleanup no longer deletes a random ticket id for the sprint.** The exhaustive suite captured the created sprint's id into the ticket cleanup set, but sprints live in `zp_sprints`, a different id space with no delete tool. On instances where the sprint id happened to collide with a ticket id (fresh CI instances, where it silently deleted a seeded demo ticket) cleanup passed; on a persistent dev instance with non-colliding ids, `delete_ticket` hit a soft error and aborted the whole cleanup. Sprints are now left to the scratch-project teardown that already owns them.
+
 ## v2.8.0 — 2026-09-08
 
 ### Added
