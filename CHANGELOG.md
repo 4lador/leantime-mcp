@@ -6,6 +6,14 @@
 
 - **Documentation honesty pass**: absolute claims reworded as present-tense mechanisms across the released CHANGELOG entries, the backup/restore guide, the v1.x migration notes and the public rustdoc — "immune to the per-call limit" becomes date-window bisection with surfaced warnings, "never losses" becomes duplicates-not-losses via id-keyed dedup, "fully compatible" becomes reads-the-same-files-unchanged. Also fixed the stale tool count in the lib docs (41 → 42 — the registry exposes 42). Comments and docs only; no functional change.
 
+## v2.9.0 — 2026-09-14
+
+### Added
+
+- **Early timeout warning on bulk tools** (#632): `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets` and `leantime_bulk_schedule_tickets` now estimate their sequential API-call duration from the instance's rate limit (discovered from 429 headers, 10 req/min default) and, when the estimate outlasts a typical MCP client timeout (60 s, 10 s margin), inject an explicit `warnings` entry into BOTH the dry-run and the execution envelope: estimated duration, rate limit used, and the three mitigations (chunk into ≤ rate-limit-sized batches, always pass an `idempotencyKey`, and after a client timeout VERIFY via list/get before any retry — the server keeps writing after the client aborts, which previously read as a silent failure). `bulk_schedule` has no dry-run phase, so its warning lives on the execution envelope only. The estimate is deliberately pessimistic: the first rate-window burst passes untrottled, every additional full window costs ~60 s of 429 backoff plus flat per-call latency.
+- **MCP progress notifications** (#632): a client that passes `_meta.progressToken` on a `tools/call` now receives `notifications/progress` after every completed API call and during every 429 backoff wait — the waits are what let timeout-aware clients keep a multi-minute bulk batch alive. Notifications flow through a single stdout writer task (responses included), which serializes every write to the wire; the emitter is installed only for calls that carry a token, so a token-less call emits zero notifications (verified by a stdio-level e2e). Implemented inside the shared client (install/clear around dispatch) — the 42 tool handlers and the `Handler` signature are untouched.
+- **Chunking guidance**: the bulk tool descriptions now say to prefer chunks of ≤ 10 items per call on low-limit instances, and the Troubleshooting section documents the warning and the progress mechanism.
+
 ## v2.8.1 — 2026-09-13
 
 ### Fixed

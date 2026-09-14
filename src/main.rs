@@ -229,7 +229,18 @@ async fn serve() {
     }
 
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let mut stdout = tokio::io::stdout();
+    // Single stdout writer: responses AND progress notifications flow
+    // through one channel, which serializes all writes to the wire. Handlers
+    // emit `notifications/progress` from deep inside the API client via
+    // this sender — the serve loop stays free to await long-running calls.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(line) = out_rx.recv().await {
+            let _ = stdout.write_all(line.as_bytes()).await;
+            let _ = stdout.flush().await;
+        }
+    });
     let mut reader = BufReader::new(tokio::io::stdin());
     const MAX_LINE: usize = 10 * 1024 * 1024; // 10 MB — reject pathological inputs
     let mut line = String::new();
@@ -251,8 +262,7 @@ async fn serve() {
         if line.len() > MAX_LINE {
             let resp = json!({ "jsonrpc": "2.0", "id": null,
                 "error": { "code": -32600, "message": "Request too large (10 MB limit)" } });
-            let _ = stdout.write_all(format!("{}\n", resp).as_bytes()).await;
-            let _ = stdout.flush().await;
+            let _ = out_tx.send(format!("{}\n", resp));
             continue;
         }
 
@@ -261,8 +271,7 @@ async fn serve() {
             Err(_) => {
                 let resp = json!({ "jsonrpc": "2.0", "id": null,
                     "error": { "code": -32700, "message": "Parse error" } });
-                let _ = stdout.write_all(format!("{}\n", resp).as_bytes()).await;
-                let _ = stdout.flush().await;
+                let _ = out_tx.send(format!("{}\n", resp));
                 continue;
             }
         };
@@ -316,6 +325,25 @@ async fn serve() {
             "tools/call" => {
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                // Progress opt-in (#632): a client that sends
+                // `_meta.progressToken` gets `notifications/progress` on
+                // every completed API call and every 429 backoff wait —
+                // timeout-aware clients extend their budget per notification,
+                // keeping long bulk batches alive. The emitter is installed
+                // only when the call carries a token — token-less calls
+                // emit nothing.
+                let progress_token = params
+                    .pointer("/_meta/progressToken")
+                    .cloned()
+                    .filter(|t| !t.is_null());
+                if let Some(token) = &progress_token {
+                    // Total hint: bulk tools carry exactly one array argument
+                    // (+1 for the preparatory users lookup, often cached).
+                    let total = args.as_object().and_then(|o| {
+                        o.values().find(|v| v.is_array()).and_then(|v| v.as_array())
+                    }).map(|a| (a.len() + 1) as u64);
+                    client.lock().await.set_progress(token.clone(), total, out_tx.clone());
+                }
                 let result = match active_registry.iter().find(|t| t.name == name) {
                     Some(t) => (t.handler)(args, client.clone()).await,
                     None => {
@@ -331,6 +359,9 @@ async fn serve() {
                         }
                     }
                 };
+                if progress_token.is_some() {
+                    client.lock().await.clear_progress();
+                }
                 Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
             }
             _ => {
@@ -342,10 +373,13 @@ async fn serve() {
         if let Some(resp) = response {
             let mut out = serde_json::to_string(&resp).unwrap_or_default();
             out.push('\n');
-            let _ = stdout.write_all(out.as_bytes()).await;
-            let _ = stdout.flush().await;
+            let _ = out_tx.send(out);
         }
     }
+    // EOF: drop the sender so the writer drains and exits — the final
+    // response must reach the pipe before the process goes away.
+    drop(out_tx);
+    let _ = writer.await;
 }
 
 // ---------------------------------------------------------------------------

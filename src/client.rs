@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::time::Duration;
 
 const MAX_429_RETRIES: usize = 5;
@@ -54,6 +54,76 @@ pub fn fetch_limit() -> usize {
         .unwrap_or(DEFAULT_FETCH_LIMIT)
 }
 
+/// Per-request progress emitter for MCP `notifications/progress`.
+///
+/// Installed by the server loop when the caller supplied a
+/// `_meta.progressToken`; `None` otherwise (the MCP spec forbids
+/// unsolicited notifications): no emitter, no notifications — a silent
+/// client receives nothing. Lines are
+/// handed to a single stdout writer task through `tx`, keeping the wire
+/// free of interleaved writes. Emission points: every completed API call
+/// (`step`) and every 429 backoff wait (`stall`) — the stalls are what let
+/// timeout-aware clients keep a long bulk batch alive.
+pub struct ProgressSink {
+    token: Value,
+    total: Option<u64>,
+    done: u64,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl ProgressSink {
+    /// Build a sink for one `tools/call`: the client-supplied token, the
+    /// best-effort total hint (array length + preparatory calls) and the
+    /// shared stdout writer channel.
+    pub fn new(
+        token: Value,
+        total: Option<u64>,
+        tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Self {
+        Self {
+            token,
+            total,
+            done: 0,
+            tx,
+        }
+    }
+
+    /// Build one `notifications/progress` line and hand it to the writer.
+    /// Send failures are ignored: a dead writer task means the session is
+    /// ending — notifications are best-effort by design.
+    fn send(&self, progress: u64, message: &str) {
+        let mut params = json!({
+            "progressToken": self.token,
+            "progress": progress,
+            "message": message,
+        });
+        if let Some(total) = self.total {
+            params["total"] = json!(total);
+        }
+        let line = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": params,
+        })
+        .to_string();
+        let _ = self.tx.send(format!("{}\n", line));
+    }
+
+    /// One API call completed — bump the counter and announce it.
+    pub fn step(&mut self, method: &str) {
+        self.done += 1;
+        let message = format!("{} done", method);
+        self.send(self.done, &message);
+    }
+
+    /// Rate-limit backoff started — announce WITHOUT counting the call
+    /// (it has not completed; the counter only grows on `step`).
+    pub fn stall(&self, wait_ms: u64) {
+        let message = format!("rate limit — waiting ~{}s", (wait_ms + 500) / 1000);
+        self.send(self.done, &message);
+    }
+}
+
 /// Leantime JSON-RPC client: adaptive 429 retry, 502/503/504 retry,
 /// status-map and user caches, response size cap.
 pub struct LeantimeClient {
@@ -68,6 +138,10 @@ pub struct LeantimeClient {
     /// `None` until configured — handlers refuse `idempotencyKey` calls
     /// rather than silently skipping the journal.
     idempotency_dir: Option<std::path::PathBuf>,
+    /// Progress emitter for the in-flight `tools/call`, when the caller
+    /// opted in via `progressToken`. Taken/restored around each request so
+    /// the retry loop can announce 429 waits without borrow conflicts.
+    progress: Option<ProgressSink>,
 }
 
 /// Stable identity key for a ticket across fetches — ids arrive as strings
@@ -249,12 +323,14 @@ async fn rpc_roundtrip(
 /// the instance's allowance when shared (sequential path) and stays
 /// per-request when spawned (concurrent path) — safe either way because
 /// the policy is reactive: the instance's limiter governs throughput.
+/// `progress` (sequential path only) receives a notification per 429 wait.
 async fn request_with_retries(
     http: &reqwest::Client,
     url: &str,
     api_key: &str,
     body: &Value,
     discovered_rate_limit: &mut Option<u32>,
+    progress: Option<&mut ProgressSink>,
 ) -> Result<Value, ApiError> {
     let mut network_retries = 0u32;
     let mut last_429_delay = 0u64;
@@ -292,6 +368,9 @@ async fn request_with_retries(
                     let limit = discovered_rate_limit.unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN);
                     let rate_delay = (60_000 / limit as u64).max(1000);
                     last_429_delay = header_delay_ms.unwrap_or(rate_delay);
+                    if let Some(p) = progress.as_deref() {
+                        p.stall(last_429_delay);
+                    }
                     tokio::time::sleep(Duration::from_millis(last_429_delay)).await;
                     continue;
                 }
@@ -330,6 +409,7 @@ impl LeantimeClient {
             status_cache: std::collections::HashMap::new(),
             user_cache: None,
             idempotency_dir: None,
+            progress: None,
         }
     }
 
@@ -344,6 +424,31 @@ impl LeantimeClient {
         self.idempotency_dir.as_deref()
     }
 
+    /// The instance's requests-per-minute allowance: discovered from 429
+    /// headers when one has been seen, the documented default otherwise.
+    /// Bulk tools read it to estimate batch duration.
+    pub fn rate_limit(&self) -> u32 {
+        self.discovered_rate_limit
+            .unwrap_or(DEFAULT_RATE_LIMIT_PER_MIN)
+    }
+
+    /// Install the progress emitter for the request being dispatched
+    /// (sequential path only — the server loop serializes dispatch).
+    pub fn set_progress(
+        &mut self,
+        token: Value,
+        total: Option<u64>,
+        tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) {
+        self.progress = Some(ProgressSink::new(token, total, tx));
+    }
+
+    /// Drop the emitter — a `tools/call` is done, the next one starts clean
+    /// even if it carries no `progressToken`.
+    pub fn clear_progress(&mut self) {
+        self.progress = None;
+    }
+
     /// Call a Leantime JSON-RPC method (`method` without the `leantime.rpc.` prefix).
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, ApiError> {
         self.rpc_id += 1;
@@ -354,14 +459,23 @@ impl LeantimeClient {
             "id": self.rpc_id,
         });
         let url = format!("{}/api/jsonrpc", self.base_url);
-        request_with_retries(
+        // take/restore keeps the borrows disjoint (http vs progress) and
+        // leaves no stale emitter if a future refactor returns early.
+        let mut progress = self.progress.take();
+        let result = request_with_retries(
             &self.http,
             &url,
             &self.api_key,
             &body,
             &mut self.discovered_rate_limit,
+            progress.as_mut(),
         )
-        .await
+        .await;
+        if let Some(p) = progress.as_mut() {
+            p.step(method);
+        }
+        self.progress = progress;
+        result
     }
 
     /// Fetch `comments.getComments` for many tickets with bounded concurrency.
@@ -405,9 +519,10 @@ impl LeantimeClient {
                 // Local limiter state per request: the shared &mut client
                 // cannot cross the spawn boundary, and the policy is reactive
                 // (429-driven) so per-request state is safe — the instance's
-                // rate limit governs everyone regardless.
+                // rate limit governs everyone regardless. No progress here:
+                // the concurrent path serves CLI backup, not MCP calls.
                 let mut discovered = None;
-                request_with_retries(&http, &url, &api_key, &body, &mut discovered).await
+                request_with_retries(&http, &url, &api_key, &body, &mut discovered, None).await
             }));
         }
         let mut out = Vec::with_capacity(handles.len());

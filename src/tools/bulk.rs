@@ -147,12 +147,17 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
             let changes = vec![
                 json!({"field": "tickets", "to": format!("{} items would be created", items.len())}),
             ];
+            // Early timeout warning (#632): a batch estimated to outlast a
+            // typical MCP client timeout is flagged BEFORE any write.
+            let warnings: Vec<String> = batch_timeout_warning(tickets.len(), c.rate_limit())
+                .into_iter()
+                .collect();
             return ok_result(&json!({
                 "dryRun": true,
                 "valid": true,
                 "errors": [],
                 "changes": changes,
-                "warnings": [],
+                "warnings": warnings,
                 "items": items,
             }));
         }
@@ -182,7 +187,12 @@ fn h_bulk_create(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 }
             }
         }
-        let summary = bulk_summary(results);
+        let mut summary = bulk_summary(results);
+        // Same warning on the execution envelope: even when the client
+        // times out, the final (or replayed) result explains what happened.
+        if let Some(w) = batch_timeout_warning(tickets.len(), c.rate_limit()) {
+            summary["warnings"] = json!(vec![w]);
+        }
         if let Some(w) = idempotency_note(&c, idem_key, "leantime_bulk_create_tickets", &summary) {
             let mut warned = summary;
             warned["idempotencyWarning"] = json!(w);
@@ -301,12 +311,15 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                     .unwrap_or_default();
                 items.push(json!({ "index": i + 1, "id": tid, "valid": true, "fields": fields }));
             }
+            let warnings: Vec<String> = batch_timeout_warning(updates.len(), c.rate_limit())
+                .into_iter()
+                .collect();
             return ok_result(&json!({
                 "dryRun": true,
                 "valid": all_valid,
                 "errors": [],
                 "changes": [],
-                "warnings": [],
+                "warnings": warnings,
                 "items": items,
             }));
         }
@@ -337,7 +350,11 @@ fn h_bulk_update(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> 
                 ),
             }
         }
-        ok_result(&bulk_summary(results))
+        let mut summary = bulk_summary(results);
+        if let Some(w) = batch_timeout_warning(updates.len(), c.rate_limit()) {
+            summary["warnings"] = json!(vec![w]);
+        }
+        ok_result(&summary)
     })
 }
 
@@ -387,7 +404,13 @@ fn h_bulk_schedule(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value
                 ),
             }
         }
-        ok_result(&bulk_summary(results))
+        let mut summary = bulk_summary(results);
+        // No dry-run phase on this tool — the execution envelope is the
+        // only place the timeout warning can live.
+        if let Some(w) = batch_timeout_warning(schedules.len(), c.rate_limit()) {
+            summary["warnings"] = json!(vec![w]);
+        }
+        ok_result(&summary)
     })
 }
 

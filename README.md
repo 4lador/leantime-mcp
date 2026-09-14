@@ -252,7 +252,7 @@ Restore writes the backup into a newly created project — it does not merge int
 ## Troubleshooting
 
 - **Start with `leantmcp doctor`** — it checks the key file, permissions, config and the key against the live instance.
-- **Bulk operations are slow** — the instance's rate limit governs throughput (Leantime defaults to 10 req/min); retries are transparent but a 50-item batch can take minutes. Instances with generous limits are correspondingly faster.
+- **Bulk operations are slow** — the instance's rate limit governs throughput (Leantime defaults to 10 req/min); retries are transparent but a 50-item batch can take minutes. Prefer chunks of ≤ 10 items per call on low-limit instances. When a batch is estimated to outlast typical MCP client timeouts (~60 s), the dry-run and execution envelopes carry an explicit `warnings` entry saying so. MCP clients that request progress (`_meta.progressToken`) also receive `notifications/progress` on every API call and every rate-limit wait, which lets timeout-aware clients keep the call alive.
 - **"Ambiguous outcome" error after a mutation** — the instance returned a transient 5xx after the request was sent; the change may or may not have been applied. Verify the result (re-read the entity) before retrying — a blind retry can duplicate it.
 - **Key rejected** — `leantmcp key test` validates live; `leantmcp key rotate` mints a replacement and swaps it in.
 - **Windows** — the PowerShell installer puts the binary in `%USERPROFILE%\.local\bin`; make sure it is on `PATH`.

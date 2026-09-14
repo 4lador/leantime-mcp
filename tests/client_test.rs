@@ -1,5 +1,5 @@
 use mockito::Server;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use leantmcp::client::LeantimeClient;
 
@@ -878,4 +878,73 @@ async fn mutation_on_429_is_still_retried() {
         .await;
     assert!(r.is_ok(), "{r:?}");
     m2.assert();
+}
+
+// ---- progress notifications (#632) ----
+
+#[tokio::test]
+async fn rate_limit_defaults_to_ten_until_discovered() {
+    let server = Server::new_async().await;
+    let client = LeantimeClient::new(&server.url(), "key");
+    assert_eq!(client.rate_limit(), 10);
+}
+
+#[tokio::test]
+async fn progress_sink_receives_stall_and_step_notifications() {
+    let mut server = Server::new_async().await;
+    let url = server.url();
+
+    let _m1 = server
+        .mock("POST", "/api/jsonrpc")
+        .with_status(429)
+        .with_header("Content-Type", "application/json")
+        .with_header("Retry-After", "0")
+        .with_body(r#"{"error": "Too many requests"}"#)
+        .create_async()
+        .await;
+    let _m2 = server
+        .mock("POST", "/api/jsonrpc")
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(ok_response())
+        .create_async()
+        .await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut client = LeantimeClient::new(&url, "key");
+    client.set_progress(json!("tok-1"), Some(3), tx);
+    assert!(client.call("tickets.getAll", json!({})).await.is_ok());
+
+    let mut lines = Vec::new();
+    while let Ok(l) = rx.try_recv() {
+        lines.push(l);
+    }
+    assert_eq!(lines.len(), 2, "one stall + one step: {:?}", lines);
+
+    let stall: Value = serde_json::from_str(lines[0].trim()).unwrap();
+    assert_eq!(stall["jsonrpc"], json!("2.0"));
+    assert_eq!(stall["method"], json!("notifications/progress"));
+    assert_eq!(stall["params"]["progressToken"], json!("tok-1"));
+    assert_eq!(stall["params"]["progress"], json!(0), "stalls never count");
+    assert!(
+        stall["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("rate limit"),
+        "{}",
+        stall["params"]["message"]
+    );
+
+    let step: Value = serde_json::from_str(lines[1].trim()).unwrap();
+    assert_eq!(step["params"]["progress"], json!(1));
+    assert_eq!(step["params"]["total"], json!(3));
+    assert!(step["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("tickets.getAll"));
+
+    // Without a token (cleared): no notifications, ever.
+    client.clear_progress();
+    assert!(client.call("tickets.getAll", json!({})).await.is_ok());
+    assert!(rx.try_recv().is_err());
 }

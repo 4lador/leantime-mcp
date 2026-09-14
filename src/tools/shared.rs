@@ -55,7 +55,45 @@ pub(super) fn idempotency_note(
 }
 
 /// Rate-limit note shown on bulk tools.
-pub(super) const RATE_LIMIT_NOTE: &str = "The server transparently retries on 429 rate limits. On low-limit instances (10 req/min default), large batches may take several minutes.";
+pub(super) const RATE_LIMIT_NOTE: &str = "The server transparently retries on 429 rate limits. On low-limit instances (10 req/min default), large batches may take several minutes — prefer chunks of ≤ 10 items per call.";
+
+/// Typical MCP client timeout (opencode ≈ 60 s). A batch estimated to
+/// outlast it must be flagged BEFORE execution — the client may abort with
+/// a timeout while the server keeps writing, which reads as a failure.
+pub(super) const TYPICAL_CLIENT_TIMEOUT_SECS: u64 = 60;
+/// Safety margin: warn when the estimate crosses timeout − margin.
+const TIMEOUT_WARNING_MARGIN_SECS: u64 = 10;
+
+/// Pessimistic duration estimate for a sequential batch of `n` API calls
+/// against an instance allowing `rate_limit` req/min. The first burst
+/// (`rate_limit` calls) passes untrottled; every full window beyond costs
+/// ~60 s of 429 backoff; each call adds a flat per-request latency.
+pub(super) fn estimated_batch_seconds(n: usize, rate_limit: u32) -> u64 {
+    let n = (n.max(1)) as u64;
+    let rate = rate_limit.max(1) as u64;
+    let extra_windows = n.saturating_sub(1) / rate;
+    extra_windows * 60 + n * 2
+}
+
+/// The early warning #632 asks for: a batch whose ESTIMATED duration
+/// exceeds a typical MCP client timeout must not present as a silent
+/// client-side failure. `None` when the batch should complete comfortably
+/// inside the budget.
+pub(super) fn batch_timeout_warning(n: usize, rate_limit: u32) -> Option<String> {
+    let est = estimated_batch_seconds(n, rate_limit);
+    if est <= TYPICAL_CLIENT_TIMEOUT_SECS - TIMEOUT_WARNING_MARGIN_SECS {
+        return None;
+    }
+    Some(format!(
+        "Estimated duration ~{}min{}s for {} API calls at ~{}/req-min — longer than typical MCP client timeouts (~{}s): the client may abort with a timeout while this server keeps writing. Prefer chunks of ≤ {} items per call; always pass an idempotencyKey; if a client timeout occurs, VERIFY the result (list/get) before any retry — do not blind-retry.",
+        est / 60,
+        est % 60,
+        n,
+        rate_limit,
+        TYPICAL_CLIENT_TIMEOUT_SECS,
+        rate_limit,
+    ))
+}
 
 /// The rule quoted verbatim in assignment-enforcement errors.
 pub(super) const ASSIGNMENT_RULE: &str =

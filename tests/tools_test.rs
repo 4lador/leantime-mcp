@@ -2881,3 +2881,167 @@ async fn update_milestone_envelope_reports_changed() {
     assert_eq!(changed[0]["to"], json!("New name"));
     m.assert();
 }
+
+// ------------------------------------------------- bulk timeout warning (#632)
+
+fn n_unassigned_tickets(n: usize) -> Vec<Value> {
+    (1..=n)
+        .map(|i| json!({ "headline": format!("bulk warn {}", i), "unassigned": true }))
+        .collect()
+}
+
+async fn users_all_mock(server: &mut Server) -> mockito::Mock {
+    server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.users.getAll"}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([])))
+        .create_async()
+        .await
+}
+
+#[tokio::test]
+async fn bulk_create_dry_run_warns_when_batch_outlasts_client_timeout() {
+    let mut server = Server::new_async().await;
+    let _u = users_all_mock(&mut server).await;
+
+    // 19 calls @ default 10 req/min → 1 full rate window + latency ≈ 98 s
+    // > the ~50 s warning threshold (60 s typical client timeout − margin).
+    let r = call(
+        "leantime_bulk_create_tickets",
+        json!({"projectId": "5", "dryRun": true, "tickets": n_unassigned_tickets(19)}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["dryRun"], json!(true));
+    assert_eq!(parsed["valid"], json!(true));
+    let w = parsed["warnings"].as_array().expect("warnings array");
+    assert_eq!(w.len(), 1, "one timeout warning expected: {:?}", w);
+    let w = w[0].as_str().unwrap();
+    assert!(w.contains("Estimated duration"), "{}", w);
+    assert!(w.contains("~10/req-min"), "{}", w);
+    assert!(w.contains("idempotencyKey"), "{}", w);
+    assert!(w.contains("do not blind-retry"), "{}", w);
+}
+
+#[tokio::test]
+async fn bulk_create_dry_run_small_batch_has_no_timeout_warning() {
+    let mut server = Server::new_async().await;
+    let _u = users_all_mock(&mut server).await;
+
+    // 2 calls fit in the first untrottled burst (~4 s) — no warning.
+    let r = call(
+        "leantime_bulk_create_tickets",
+        json!({"projectId": "5", "dryRun": true, "tickets": n_unassigned_tickets(2)}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["warnings"], json!([]));
+}
+
+#[tokio::test]
+async fn bulk_create_execution_envelope_carries_timeout_warning() {
+    let mut server = Server::new_async().await;
+    let u = users_all_mock(&mut server).await;
+    let a = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.addTicket"}).to_string(),
+        ))
+        .expect(19)
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!(["42"])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_bulk_create_tickets",
+        json!({"projectId": "5", "tickets": n_unassigned_tickets(19)}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    assert_eq!(parsed["summary"]["created"], json!(19));
+    assert_eq!(parsed["summary"]["failed"], json!(0));
+    let w = parsed["warnings"]
+        .as_array()
+        .expect("warnings on execution");
+    assert_eq!(w.len(), 1);
+    assert!(w[0].as_str().unwrap().contains("Estimated duration"));
+    u.assert();
+    a.assert();
+}
+
+#[tokio::test]
+async fn bulk_schedule_execution_carries_timeout_warning() {
+    let mut server = Server::new_async().await;
+    let p = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch"}).to_string(),
+        ))
+        .expect(19)
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([true])))
+        .create_async()
+        .await;
+
+    // No dry-run phase on this tool — the warning lives on execution only.
+    let schedules: Vec<Value> = (1..=19)
+        .map(|i| json!({ "ticketId": i.to_string(), "editFrom": "2026-09-14" }))
+        .collect();
+    let r = call(
+        "leantime_bulk_schedule_tickets",
+        json!({"projectId": "5", "schedules": schedules}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    let w = parsed["warnings"].as_array().expect("warnings on schedule");
+    assert_eq!(w.len(), 1);
+    assert!(w[0].as_str().unwrap().contains("Estimated duration"));
+    p.assert();
+}
+
+#[tokio::test]
+async fn bulk_update_execution_envelope_carries_timeout_warning() {
+    let mut server = Server::new_async().await;
+    let p = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.patch"}).to_string(),
+        ))
+        .expect(19)
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([true])))
+        .create_async()
+        .await;
+
+    let updates: Vec<Value> = (1..=19)
+        .map(|i| json!({ "ticketId": i.to_string(), "headline": format!("h{}", i) }))
+        .collect();
+    let r = call(
+        "leantime_bulk_update_tickets",
+        json!({"projectId": "5", "updates": updates}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    let w = parsed["warnings"].as_array().expect("warnings on update");
+    assert_eq!(w.len(), 1);
+    assert!(w[0].as_str().unwrap().contains("Estimated duration"));
+    p.assert();
+}

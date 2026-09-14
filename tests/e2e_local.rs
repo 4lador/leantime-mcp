@@ -760,6 +760,41 @@ async fn local_e2e_exhaustive() {
         .await;
     err_contains(&r, "NOTHING was created", "bulk all-or-nothing");
 
+    // Timeout warning (#632): a 19-item dry-run must flag the estimated
+    // duration, while a 2-item dry-run stays silent. Zero writes either way.
+    let warn_tickets: Vec<Value> = (1..=19)
+        .map(|i| json!({"headline": format!("bulk warn {}", i), "unassigned": true}))
+        .collect();
+    let r = ok(
+        &e.call(
+            "leantime_bulk_create_tickets",
+            json!({"projectId": pid, "dryRun": true, "tickets": warn_tickets}),
+        )
+        .await,
+        "bulk dry-run timeout warning",
+    )
+    .parsed
+    .clone();
+    assert_eq!(r["dryRun"], json!(true));
+    let w = r["warnings"].as_array().expect("warnings array");
+    assert_eq!(w.len(), 1, "expected the timeout warning: {:?}", w);
+    assert!(w[0].as_str().unwrap().contains("Estimated duration"));
+    let r = ok(
+        &e.call(
+            "leantime_bulk_create_tickets",
+            json!({
+                "projectId": pid,
+                "dryRun": true,
+                "tickets": [{"headline": "bulk small", "unassigned": true}],
+            }),
+        )
+        .await,
+        "bulk dry-run small batch",
+    )
+    .parsed
+    .clone();
+    assert_eq!(r["warnings"], json!([]));
+
     // Bulk update: first 5 → status 0
     let updates: Vec<Value> = bulk_ids
         .iter()
