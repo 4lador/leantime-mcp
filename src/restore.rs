@@ -964,7 +964,7 @@ pub async fn execute_restore(
         }
     }
 
-    // 6. Verify — chunked completeness fetch (immune to the API limit).
+    // 6. Verify — chunked completeness fetch (date-window pagination).
     // Verification stays best-effort: a fetch failure was skipped before
     // chunking and still is.
     if let Ok((verify_items, verify_warnings)) = client

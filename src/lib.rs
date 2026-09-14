@@ -3,7 +3,7 @@
 //! Architecture:
 //! - [`client`] — JSON-RPC HTTP client with adaptive 429 retry and caches
 //! - [`config`] — multi-instance keyring (`~/.config/leantime/instances/`)
-//! - [`tools`] — the 41 MCP tools, split by domain
+//! - [`tools`] — the 42 MCP tools, split by domain
 //! - [`backup`] — project backup to timestamped JSON files
 //! - [`restore`] — project restore from backup files
 //! - [`markdown`] — deterministic Markdown → rich HTML (byte-parity with the
@@ -33,5 +33,5 @@ pub mod idempotency;
 pub mod markdown;
 /// Project restore from backup files.
 pub mod restore;
-/// The 41 MCP tools.
+/// The 42 MCP tools.
 pub mod tools;

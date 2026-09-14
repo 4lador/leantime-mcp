@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.8.2 — 2026-09-14
+
+### Changed
+
+- **Documentation honesty pass**: absolute claims reworded as present-tense mechanisms across the released CHANGELOG entries, the backup/restore guide, the v1.x migration notes and the public rustdoc — "immune to the per-call limit" becomes date-window bisection with surfaced warnings, "never losses" becomes duplicates-not-losses via id-keyed dedup, "fully compatible" becomes reads-the-same-files-unchanged. Also fixed the stale tool count in the lib docs (41 → 42 — the registry exposes 42). Comments and docs only; no functional change.
+
 ## v2.8.1 — 2026-09-13
 
 ### Fixed
@@ -11,7 +17,7 @@
 
 ### Added
 
-- **Result envelopes**: `leantime_list_tickets` at the 500-result cap returns `{tickets, returned, truncated: true}` — a structured boolean an LLM cannot miss, replacing the textual note. `leantime_update_ticket` and `leantime_update_milestone` responses gain `changed` (field, from, to, status label), `unchanged` (fields already at their target) and `warnings` — computed from a pre-patch read of the live entity, so the agent sees what actually changed rather than a raw ok/id. Additive: existing consumers see new fields, nothing moved.
+- **Result envelopes**: `leantime_list_tickets` at the 500-result cap returns `{tickets, returned, truncated: true}` — a structured boolean that is harder for an LLM to miss than the textual note, replacing the textual note. `leantime_update_ticket` and `leantime_update_milestone` responses gain `changed` (field, from, to, status label), `unchanged` (fields already at their target) and `warnings` — computed from a pre-patch read of the live entity, so the agent sees what actually changed rather than a raw ok/id. Additive: existing consumers see new fields, nothing moved.
 - **`LEANTIME_MCP_PROFILE=readonly`** — execution-level capability filter: write and destructive handlers are removed at registry construction (they do not exist in the process, not merely hidden). Defense in depth with per-instance `tools.json` and `DESTRUCTIVE_POLICY`. A per-process leash, not an instance lock.
 - **Backup retention** (`LEANTIME_MCP_BACKUP_RETENTION_DAYS`, default 0 = keep everything): after a validated backup (re-read and re-parsed from disk), same-project backups older than the window are purged with a summary; validation failure skips the purge — the previous generation stays. Backup writes are now atomic (temp + rename). CLI adds `--prune` (global manual purge) and `--output DIR`. The `docs/backup-restore.md` guide documents retention and the optional `age` encryption workflow (asymmetric: the backup machine holds only a public recipient).
 - **Restore manifest**: after a successful restore, a `<backup>.restore-manifest.json` lands next to the source — target project, counts, and the full old→new id mapping (sorted for stable diffs). Restores are auditable after the fact.
@@ -69,7 +75,7 @@
 
 ### Added
 
-- **Date-window pagination on completeness fetches**: backup, restore verification and `leantime_project_context` are now immune to the API's per-call limit. The fetch starts with a single unwindowed call (projects under `LEANTIME_MCP_FETCH_LIMIT` — 10 000 by default — still cost exactly one request); when that call comes back full, the [1970, now + 2 days] range is bisected by modification date until every window fits under the limit. Windows overlap by ±1s to defeat the API's strict `>`/`<` boundaries, results are deduplicated by ticket id, and ascending traversal makes concurrent modifications produce duplicates — never losses. Live-validated on a 279-ticket project with the limit forced to 100: the chunked pass returns the exact same id set as the fast path. Only pathological cases (more tickets than the limit sharing one timestamp) still emit a warning (backup result, restore report, `project_context.warnings`).
+- **Date-window pagination on completeness fetches**: backup, restore verification and `leantime_project_context` are no longer capped by the API's per-call limit. The fetch starts with a single unwindowed call (projects under `LEANTIME_MCP_FETCH_LIMIT` — 10 000 by default — still cost exactly one request); when that call comes back full, the [1970, now + 2 days] range is bisected by modification date until every window fits under the limit. Windows overlap by ±1s to defeat the API's strict `>`/`<` boundaries, results are deduplicated by ticket id, and ascending traversal means concurrent modifications can produce duplicates — not losses (the id-keyed dedup absorbs them). Live-validated on a 279-ticket project with the limit forced to 100: the chunked pass returns the same id set as the fast path. Only pathological cases (more tickets than the limit sharing one timestamp) still emit a warning (backup result, restore report, `project_context.warnings`).
 
 ## v2.3.3 — 2026-09-08
 
@@ -93,7 +99,7 @@
 
 ### Added
 
-- **`dryRun: true` on mutation tools**: `leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets` and `leantime_log_time` accept `dryRun: true` — every validation runs (assignment, editorId existence, value constraints) and a verdict is returned instead of mutating. Updates resolve `from → to` values against the current entity (one read), with status labels and a warning when a field already holds the target value; bulk tools return per-item previews (payload builders extracted so the dry-run and write paths can never drift); `log_time` dry-runs 100% locally and accumulates all errors. A failed validation is `valid: false` with the errors — not an MCP error. Delete tools are unchanged: their `confirm` gate already is a dry-run.
+- **`dryRun: true` on mutation tools**: `leantime_create_ticket`, `leantime_update_ticket`, `leantime_create_milestone`, `leantime_update_milestone`, `leantime_bulk_create_tickets`, `leantime_bulk_update_tickets` and `leantime_log_time` accept `dryRun: true` — every validation runs (assignment, editorId existence, value constraints) and a verdict is returned instead of mutating. Updates resolve `from → to` values against the current entity (one read), with status labels and a warning when a field already holds the target value; bulk tools return per-item previews (payload builders extracted so the dry-run and write paths share the same code); `log_time` dry-runs entirely locally and accumulates all errors. A failed validation is `valid: false` with the errors — not an MCP error. Delete tools are unchanged: their `confirm` gate already is a dry-run.
 
 ## v2.2.0 — 2026-09-07
 
@@ -110,11 +116,11 @@
 
 ### Added
 
-- **Restore**: `leantmcp restore <file> [--confirm]` — rebuilds a backup into a NEW project (never merges with existing data). Topological sort (parents before subtasks), ID remapping (milestones, sprints, tickets, comments), interactive status resolution (label match → statusType fallback → prompt with project name/ID), v3.7.3 comment crash recovery, post-restore verification. 13 unit tests + live-tested with 279-ticket Vision backup (208 subtasks, 156 milestone refs, 5 sprints — all cross-references remapped correctly, 0 failures).
+- **Restore**: `leantmcp restore <file> [--confirm]` — rebuilds a backup into a NEW project (does not merge into existing data). Topological sort (parents before subtasks), ID remapping (milestones, sprints, tickets, comments), interactive status resolution (label match → statusType fallback → prompt with project name/ID), v3.7.3 comment crash recovery, post-restore verification. 13 unit tests + live-tested with 279-ticket Vision backup (208 subtasks, 156 milestone refs, 5 sprints — all cross-references remapped correctly, 0 failures).
 
 ## v2.0.0 — 2026-09-07
 
-Complete rewrite in Rust (v1.x was TypeScript/Deno, now on the `frozen-legacy-ts` branch). The keyring, credentials and harness configs are fully compatible — v2.0.0 is a drop-in replacement. See [Migrating from v1.x](README.md#migrating-from-v1x).
+Complete rewrite in Rust (v1.x was TypeScript/Deno, now on the `frozen-legacy-ts` branch). The keyring, credentials and harness configs carry over unchanged — the v2 binary reads them as-is, making v2.0.0 a drop-in replacement. See [Migrating from v1.x](README.md#migrating-from-v1x).
 
 ### Added
 

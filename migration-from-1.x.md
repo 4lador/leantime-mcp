@@ -1,8 +1,8 @@
 # Migrating from v1.x
 
-v1.x was TypeScript/Deno; v2.0.0+ is a Rust rewrite. The keyring,
-credentials and harness configs are **fully compatible** — the v2 binary
-is a drop-in replacement:
+v1.x was TypeScript/Deno; v2.0.0+ is a Rust rewrite. The v2 binary reads
+the same keyring layout, credentials and harness configs unchanged — it is
+a drop-in replacement:
 
 - **Your keyring works as-is**: `~/.config/leantime/instances/<name>/` is unchanged since v1.7.0. Both profiles and the `default` file resolve identically.
 - **Your install URL still works**: `curl -fsSL https://raw.githubusercontent.com/4lador/leantime-mcp/main/install.sh | sh` delivers the v2 binary at the same location (`~/.local/bin/leantmcp`). The installer verifies the SHA-256 checksum as before.

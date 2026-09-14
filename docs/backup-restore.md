@@ -81,8 +81,9 @@ purge: after each successful backup is written and **validated** (re-read
 from disk and re-parsed), same-project backups older than N days are purged.
 The just-written backup is structurally protected from purge, and a
 validation failure (kill mid-write, full disk) skips the purge entirely —
-the previous generation stays. Purge issues are warnings, never errors:
-the backup itself already succeeded.
+the previous generation stays. Purge issues are reported as warnings: the
+backup itself has already succeeded, and a failed purge leaves the
+previous generation in place.
 
 ```bash
 leantmcp backup --prune   # manual purge of everything older than the window

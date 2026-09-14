@@ -135,8 +135,8 @@ pub enum ApiError {
 }
 
 /// Outcome of ONE HTTP round trip — retry policy stays with the caller
-/// ([`request_with_retries`]) so the sequential and concurrent paths can
-/// never diverge.
+/// ([`request_with_retries`]) so the sequential and concurrent paths share
+/// one implementation.
 enum RoundTrip {
     Ok(Value),
     /// 429 with the server's delay hint (Retry-After / X-RateLimit-Retry-After,
@@ -366,9 +366,9 @@ impl LeantimeClient {
 
     /// Fetch `comments.getComments` for many tickets with bounded concurrency.
     /// Results come back in INPUT ORDER (deterministic backups); errors are
-    /// per-ticket so one failure never drops the whole batch. Concurrency is
+    /// per-ticket so a single failure does not drop the whole batch. Concurrency is
     /// an in-flight cap only — the retry policy stays reactive (429 backoff),
-    /// so the instance's rate limit always governs aggregate throughput.
+    /// so the instance's rate limit governs aggregate throughput.
     pub async fn get_comments_for_tickets(
         &mut self,
         ticket_ids: &[String],
@@ -527,8 +527,10 @@ impl LeantimeClient {
     }
 
     /// Completeness fetch of every ticket in a project (optionally filtered
-    /// by extra searchCriteria such as `{"type": "milestone"}`), immune to
-    /// the API's per-call limit. Fast path: a single unwindowed call —
+    /// by extra searchCriteria such as `{"type": "milestone"}`), handling
+    /// projects larger than the API's per-call limit via date-window
+    /// bisection (pathological windows surface warnings).
+    /// Fast path: a single unwindowed call —
     /// projects smaller than [`fetch_limit`] cost exactly one request (same
     /// as before chunking existed). When that call comes back full, the
     /// fetch falls back to date-window bisection over [1970, now + 2 days].
@@ -597,7 +599,7 @@ impl LeantimeClient {
         // Truncation suspected — bisect [from, to] by modification date.
         // Ascending-order invariants that make this loss-free:
         // - a ticket's date only moves forward, so a ticket modified during
-        //   the fetch reappears in a LATER window → duplicate, never loss
+        //   the fetch reappears in a LATER window → duplicate, not loss
         //   (the id-keyed map absorbs duplicates);
         // - each call widens its window by ±1s because the API compares
         //   strictly (`date > from AND date < to`): without the overlap, a
