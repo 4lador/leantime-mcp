@@ -87,7 +87,8 @@ pub fn write_restore_manifest(
             "projectId": result.new_project_id,
             "projectName": result.new_project_name,
         },
-        "restoredAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "restoredAt": jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now())
+            .expect("fixed strtime pattern is always valid"),
         "counts": {
             "milestones": result.milestones_created,
             "sprints": result.sprints_created,
@@ -597,7 +598,11 @@ pub async fn execute_restore(
         .and_then(|v| v.as_str())
         .unwrap_or("project");
 
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M");
+    let now = jiff::fmt::strtime::format(
+        "%Y-%m-%d %H:%M",
+        &jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::system()),
+    )
+    .expect("fixed strtime pattern is always valid");
     let new_name = format!("{} (restored {})", original_name, now);
 
     let milestones = backup["milestones"].as_array().cloned().unwrap_or_default();

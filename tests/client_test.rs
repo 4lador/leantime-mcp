@@ -167,13 +167,17 @@ async fn retry_after_http_date_in_past_retries_immediately() {
     let mut server = Server::new_async().await;
     let url = server.url();
 
-    let past = chrono::Utc::now() - chrono::Duration::seconds(3600);
+    let past = jiff::Timestamp::now() - jiff::Span::new().seconds(3600);
     let _m1 = server
         .mock("POST", "/api/jsonrpc")
         .with_status(429)
         .with_header(
             "Retry-After",
-            &past.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            &jiff::fmt::strtime::format(
+                "%a, %d %b %Y %H:%M:%S GMT",
+                &past.to_zoned_datetime(jiff::tz::TimeZone::UTC),
+            )
+            .unwrap(),
         )
         .with_body(r#"{"error": "slow down"}"#)
         .create_async()
@@ -202,13 +206,17 @@ async fn retry_after_http_date_in_future_waits_the_delta() {
     let mut server = Server::new_async().await;
     let url = server.url();
 
-    let future = chrono::Utc::now() + chrono::Duration::seconds(2);
+    let future = jiff::Timestamp::now() + jiff::Span::new().seconds(2);
     let _m1 = server
         .mock("POST", "/api/jsonrpc")
         .with_status(429)
         .with_header(
             "Retry-After",
-            &future.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            &jiff::fmt::strtime::format(
+                "%a, %d %b %Y %H:%M:%S GMT",
+                &future.to_zoned_datetime(jiff::tz::TimeZone::UTC),
+            )
+            .unwrap(),
         )
         .with_body(r#"{"error": "slow down"}"#)
         .create_async()
@@ -233,6 +241,41 @@ async fn retry_after_http_date_in_future_waits_the_delta() {
     assert!(
         elapsed < std::time::Duration::from_secs(6),
         "…but capped, took {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn retry_after_malformed_value_neither_panics_nor_hangs() {
+    let mut server = Server::new_async().await;
+    let url = server.url();
+
+    // Neither delta-seconds nor an HTTP-date: the parse chain (u64 →
+    // RFC 2822) must fail cleanly and fall back to the flat default
+    // backoff — this exact header shape is the jiff-migration regression
+    // surface for the rfc2822 parse path.
+    let _m1 = server
+        .mock("POST", "/api/jsonrpc")
+        .with_status(429)
+        .with_header("Retry-After", "not-a-date-or-seconds")
+        .with_body(r#"{"error": "slow down"}"#)
+        .create_async()
+        .await;
+    let _m2 = server
+        .mock("POST", "/api/jsonrpc")
+        .with_status(200)
+        .with_body(ok_response())
+        .create_async()
+        .await;
+
+    let start = std::time::Instant::now();
+    let mut client = LeantimeClient::new(&url, "key");
+    let result = client.call("tickets.getAll", json!({})).await;
+    let elapsed = start.elapsed();
+    assert!(result.is_ok());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "malformed Retry-After must fall back to default backoff, took {:?}",
         elapsed
     );
 }
@@ -478,15 +521,8 @@ async fn chunked_bisection_splits_full_windows_and_dedups() {
         .create_async()
         .await;
 
-    use chrono::NaiveDate;
-    let from = NaiveDate::from_ymd_opt(2026, 1, 1)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
-    let to = NaiveDate::from_ymd_opt(2026, 1, 31)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
+    let from = jiff::civil::date(2026, 1, 1).at(0, 0, 0, 0);
+    let to = jiff::civil::date(2026, 1, 31).at(0, 0, 0, 0);
     // Root window widened by ±1s. A full window is NOT merged: its items
     // are re-fetched by the halves (the date ranges partition the space),
     // so a realistic mock returns a subset that the halves also return.
@@ -590,15 +626,8 @@ async fn chunked_depth_cap_emits_warning() {
         .create_async()
         .await;
 
-    use chrono::NaiveDate;
-    let from = NaiveDate::from_ymd_opt(2026, 1, 1)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
-    let to = NaiveDate::from_ymd_opt(2026, 1, 31)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
+    let from = jiff::civil::date(2026, 1, 1).at(0, 0, 0, 0);
+    let to = jiff::civil::date(2026, 1, 31).at(0, 0, 0, 0);
     let mut client = LeantimeClient::new(&server.url(), "test-key");
     let (items, warnings) = client
         .get_all_tickets_chunked_in("15", json!({}), from, to, 0)

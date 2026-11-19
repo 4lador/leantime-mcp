@@ -42,11 +42,9 @@ fn ts_of(v: Option<&Value>) -> Option<i64> {
 
 /// Epoch millis → "YYYY-MM-DD" (local time, matching the TS semantics).
 fn ms_to_date(ms: i64) -> String {
-    use chrono::TimeZone;
-    chrono::Local
-        .timestamp_millis_opt(ms)
-        .single()
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+    jiff::Timestamp::from_millisecond(ms)
+        .ok()
+        .map(|ts| ts.to_zoned_datetime(jiff::tz::TimeZone::system()).date().to_string())
         .unwrap_or_default()
 }
 
@@ -115,7 +113,7 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
 
         let is_done = |t: &Value| t.get("statusType").and_then(|v| v.as_str()) == Some("DONE");
         let is_milestone = |t: &Value| t.get("type").and_then(|v| v.as_str()) == Some("milestone");
-        let now_ms = chrono::Local::now().timestamp_millis();
+        let now_ms = jiff::Timestamp::now().as_millisecond();
 
         // --- progress (fallback: computed from the fetched ticket set) ---
         let tickets_total = tickets.len();
@@ -371,7 +369,8 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
         let mut out = Map::new();
         out.insert(
             "generatedAt".into(),
-            json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            json!(jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now())
+                .expect("fixed strtime pattern is always valid")),
         );
         if !chunk_warnings.is_empty() {
             out.insert("warnings".into(), json!(chunk_warnings));

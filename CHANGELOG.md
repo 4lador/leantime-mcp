@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.10.1 — 2026-11-19
+
+### Changed
+
+- **`chrono` → `jiff` migration — RUSTSEC-2026-0543 eliminated** (chrono announced unmaintained; no patch exists, so cargo-deny's `advisories` check failed the release CI and the only clean fix was the dependency swap). Every chrono call site moved to jiff 1.0 with semantics preserved: RFC 3339 timestamps (idempotency journal, restore manifests, `generatedAt`), local-time parsing of Leantime's date strings (`parse_leantime_ts` — DST gap/fold wall times still yield no timestamp, matching chrono's `.single()`), Retry-After HTTP-date parsing (jiff's dedicated RFC 2822 printer/parser, GMT zones included), naive date-window arithmetic for ticket bisection (`days_are_24_hours` = chrono's uniform naive days), local backup filenames and created/rotated stamps. `get_all_tickets_chunked_in` now takes `jiff::civil::DateTime` instead of `chrono::NaiveDateTime` — the only public-signature change, internal de facto. New regression tests: Retry-After header that is neither delta-seconds nor HTTP-date falls back to the default backoff, idempotency TTL floors to whole days (6 d 23 h → Hit, pile 7 d → Miss), DST gap/fold rejection in a fixed Europe/Paris timezone, and the date-string shapes Leantime actually sends. 200 tests green.
+- **RustSec lockfile refresh** (rode in with the v2.10.0 post-release audit fix on `main`): `rustls` 0.23.46, `rustls-webpki` 0.103.17, `webpki-roots` 1.0.12, `quinn-proto` 0.11.19, `quinn-udp` 0.5.16, `tokio` 1.54.1 — closes the 12 advisories the v2.10.0 binaries shipped with. The CI `audit` job also gained the `checks: write` permission its check-run publication needed.
+- **`Cargo.toml` description fix**: the crates.io blurb still said "42 agent-first tools" after v2.10.0 added the 43rd.
+
 ## v2.10.0 — 2026-11-10
 
 ### Added

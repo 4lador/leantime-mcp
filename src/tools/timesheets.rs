@@ -46,7 +46,7 @@ fn h_log_time(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + S
             let date = a
                 .get("date")
                 .and_then(|v| v.as_str())
-                .unwrap_or(&chrono::Utc::now().format("%Y-%m-%d").to_string())
+                .unwrap_or(&jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC).date().to_string())
                 .to_string();
             let changes = vec![json!({
                 "field": "timesheet entry",
@@ -86,7 +86,7 @@ fn h_log_time(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + S
         let date = a
             .get("date")
             .and_then(|v| v.as_str())
-            .unwrap_or(&chrono::Utc::now().format("%Y-%m-%d").to_string())
+            .unwrap_or(&jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC).date().to_string())
             .to_string();
         let method = if mode == "set" {
             "timesheets.upsertTime"

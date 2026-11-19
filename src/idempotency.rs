@@ -66,8 +66,13 @@ fn is_expired(recorded_at: &str, ttl: i64) -> bool {
     if ttl == 0 {
         return false;
     }
-    chrono::DateTime::parse_from_rfc3339(recorded_at)
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days() >= ttl)
+    recorded_at
+        .parse::<jiff::Timestamp>()
+        .map(|t| {
+            // Whole 24h-days difference, floored (integer division) — the
+            // same semantics as chrono's num_days().
+            (jiff::Timestamp::now().as_second() - t.as_second()) / 86_400 >= ttl
+        })
         .unwrap_or(true) // unparseable timestamp → treat as expired
 }
 
@@ -148,7 +153,8 @@ pub fn record(dir: Option<&Path>, key: &str, tool: &str, result: &Value) -> Resu
         serde_json::json!({
             "tool": tool,
             "result": result,
-            "recordedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "recordedAt": jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now())
+                .expect("fixed strtime pattern is always valid"),
         }),
     );
     persist(&path, &entries)
@@ -213,11 +219,11 @@ mod tests {
         .unwrap();
         let path = dir.join("idempotency.json");
         let raw = std::fs::read_to_string(&path).unwrap();
-        let ancient = chrono::Utc::now() - chrono::Duration::days(3650);
-        let raw = raw.replace(
-            &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            &ancient.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        );
+        let ancient = jiff::Timestamp::now() - jiff::Span::new().hours(3650 * 24);
+        let ts_str = |t: jiff::Timestamp| {
+            jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap()
+        };
+        let raw = raw.replace(&ts_str(jiff::Timestamp::now()), &ts_str(ancient));
         std::fs::write(&path, raw).unwrap();
         std::env::set_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS", "0");
         assert!(matches!(
@@ -227,6 +233,55 @@ mod tests {
         std::env::set_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS", "7");
         assert!(matches!(
             lookup(Some(&dir), "old", "leantime_create_ticket"),
+            Lookup::Miss
+        ));
+        std::env::remove_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ttl_boundary_floors_to_whole_days() {
+        let dir = tmpdir("ttlb");
+        let path = dir.join("idempotency.json");
+        let entry_at = |hours_ago: i64| {
+            let t = jiff::Timestamp::now() - jiff::Span::new().hours(hours_ago);
+            json!({
+                "tool": "leantime_create_ticket",
+                "result": {"id": 3},
+                "recordedAt": jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap(),
+            })
+        };
+        std::env::set_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS", "7");
+        // 6 days + 23 h old → 6 WHOLE days → inside the TTL → Hit.
+        std::fs::write(
+            &path,
+            json!({"entries": {"k6": entry_at(6 * 24 + 23)}}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            lookup(Some(&dir), "k6", "leantime_create_ticket"),
+            Lookup::Hit(_)
+        ));
+        // Pile 7 jours : recordedAt tronqué à la seconde PUIS reculé de
+        // 7×24 h — le delta mesuré au lookup dépasse forcément 7 jours,
+        // le floor ≥ 7 → expiré → Miss. La borne >= reflète num_days().
+        let now_str =
+            jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now()).unwrap();
+        let exact7 =
+            now_str.parse::<jiff::Timestamp>().unwrap() - jiff::Span::new().hours(7 * 24);
+        let exact7_str = jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", exact7).unwrap();
+        std::fs::write(
+            &path,
+            json!({"entries": {"k7": {
+                "tool": "leantime_create_ticket",
+                "result": {"id": 4},
+                "recordedAt": exact7_str,
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            lookup(Some(&dir), "k7", "leantime_create_ticket"),
             Lookup::Miss
         ));
         std::env::remove_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS");

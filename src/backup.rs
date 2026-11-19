@@ -161,12 +161,14 @@ pub async fn backup_project_to(
     }
 
     // 5. Assemble the backup document
-    let now = chrono::Local::now();
-    let timestamp = now.format("%Y%m%dT%H%M%S");
+    let now = jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::system());
+    let timestamp = jiff::fmt::strtime::format("%Y%m%dT%H%M%S", &now)
+        .expect("fixed strtime pattern is always valid");
     let backup = json!({
         "_meta": {
             "format": "leantime-mcp-backup/1",
-            "created": now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+            "created": jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%:z", &now)
+                .expect("fixed strtime pattern is always valid"),
             "project": {"id": project_id, "name": project_name},
             "full": full,
             "counts": {

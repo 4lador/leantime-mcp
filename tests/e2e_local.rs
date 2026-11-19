@@ -156,8 +156,11 @@ async fn local_e2e_exhaustive() {
     std::env::set_var("LEANTIME_MCP_DESTRUCTIVE_POLICY", "ask");
 
     let mut e = E2e::new(&url, &key);
-    let ts = chrono::Utc::now().timestamp_millis();
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let ts = jiff::Timestamp::now().as_millisecond();
+    let today = jiff::Timestamp::now()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .date()
+        .to_string();
 
     // ================================================================ 1. projects & clients
     println!("— projects & clients");

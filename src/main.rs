@@ -439,7 +439,14 @@ async fn handle_key(sub: &clap::ArgMatches) {
         }
         Some(("rotate", args)) => {
             let name = args.get_one::<String>("name").cloned().unwrap_or_else(|| {
-                format!("MCP-rotated-{}", chrono::Local::now().format("%Y-%m-%d"))
+                format!(
+                    "MCP-rotated-{}",
+                    jiff::fmt::strtime::format(
+                        "%Y-%m-%d",
+                        &jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::system()),
+                    )
+                    .expect("fixed strtime pattern is always valid")
+                )
             });
             let key = config::read_key().unwrap_or_default();
             let url = config::read_url().unwrap_or_default();

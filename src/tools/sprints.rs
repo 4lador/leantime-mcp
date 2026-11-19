@@ -101,7 +101,7 @@ fn h_get_current_sprint(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = 
             Ok(s) => s,
             Err(e) => return error_result(&e.to_string()),
         };
-        let now = chrono::Local::now().timestamp_millis();
+        let now = jiff::Timestamp::now().as_millisecond();
         let mut with_time: Vec<Value> = Vec::new();
         for s in sprints.as_array().cloned().unwrap_or_default().into_iter() {
             let start = s

@@ -554,10 +554,10 @@ impl LeantimeClient {
         {
             if let Ok(secs) = ra.trim().parse::<u64>() {
                 Some(secs.saturating_mul(1000))
-            } else if let Ok(date) = chrono::DateTime::parse_from_rfc2822(ra.trim()) {
+            } else if let Ok(date) = jiff::fmt::rfc2822::parse(ra.trim()) {
                 // HTTP-date format: delay = max(0, date - now)
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                Some((date.timestamp_millis() - now_ms).max(0) as u64)
+                let now_ms = jiff::Timestamp::now().as_millisecond();
+                Some((date.timestamp().as_millisecond() - now_ms).max(0) as u64)
             } else {
                 None
             }
@@ -661,19 +661,12 @@ impl LeantimeClient {
         project_id: &str,
         extra_criteria: Value,
     ) -> Result<(Vec<Value>, Vec<String>), ApiError> {
-        let to = chrono::Local::now()
-            .naive_local()
-            .checked_add_signed(chrono::Duration::days(2))
-            .unwrap_or_else(|| {
-                chrono::NaiveDate::from_ymd_opt(2100, 1, 1)
-                    .unwrap()
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap()
-            });
-        let from = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap();
+        let to = jiff::Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
+            .datetime()
+            .checked_add(jiff::Span::new().days(2))
+            .unwrap_or_else(|_| jiff::civil::date(2100, 1, 1).at(0, 0, 0, 0));
+        let from = jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0);
         self.get_all_tickets_chunked_in(project_id, extra_criteria, from, to, 32)
             .await
     }
@@ -684,8 +677,8 @@ impl LeantimeClient {
         &mut self,
         project_id: &str,
         extra_criteria: Value,
-        from: chrono::NaiveDateTime,
-        to: chrono::NaiveDateTime,
+        from: jiff::civil::DateTime,
+        to: jiff::civil::DateTime,
         max_depth: u32,
     ) -> Result<(Vec<Value>, Vec<String>), ApiError> {
         let limit = fetch_limit();
@@ -726,12 +719,15 @@ impl LeantimeClient {
         //   strictly (`date > from AND date < to`): without the overlap, a
         //   ticket exactly on a split boundary would fall in NO window.
         let mut warnings = Vec::new();
-        let fmt = |d: chrono::NaiveDateTime| d.format("%Y-%m-%d %H:%M:%S").to_string();
-        let mut stack: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime, u32)> =
+        let fmt = |d: jiff::civil::DateTime| {
+            jiff::fmt::strtime::format("%Y-%m-%d %H:%M:%S", d)
+                .expect("fixed strtime pattern is always valid")
+        };
+        let mut stack: Vec<(jiff::civil::DateTime, jiff::civil::DateTime, u32)> =
             vec![(from, to, 0)];
         while let Some((w_from, w_to, depth)) = stack.pop() {
-            let lo = w_from - chrono::Duration::seconds(1);
-            let hi = w_to + chrono::Duration::seconds(1);
+            let lo = w_from - jiff::Span::new().seconds(1);
+            let hi = w_to + jiff::Span::new().seconds(1);
             let mut sc = criteria.clone();
             sc["dateFrom"] = serde_json::json!(fmt(lo));
             sc["dateTo"] = serde_json::json!(fmt(hi));
@@ -763,13 +759,16 @@ impl LeantimeClient {
                 ));
                 continue;
             }
-            match w_to
-                .signed_duration_since(w_from)
-                .num_seconds()
-                .checked_div(2)
+            match (w_to - w_from)
+                // days_are_24_hours: naive (timezone-less) windows, the same
+                // uniform-day semantics chrono's NaiveDateTime arithmetic had.
+                .total(jiff::SpanTotal::from(jiff::Unit::Second).days_are_24_hours())
+                .ok()
+                .map(|secs| (secs / 2.0).floor() as i64)
+                .filter(|half| *half > 0)
             {
-                Some(half) if half > 0 => {
-                    if let Some(mid) = w_from.checked_add_signed(chrono::Duration::seconds(half)) {
+                Some(half) => {
+                    if let Ok(mid) = w_from.checked_add(jiff::Span::new().seconds(half)) {
                         stack.push((w_from, mid, depth + 1));
                         stack.push((mid, w_to, depth + 1));
                         continue;

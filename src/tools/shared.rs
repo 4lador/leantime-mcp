@@ -431,16 +431,25 @@ pub(super) fn num_coerce(v: Option<&Value>, default: f64) -> f64 {
 /// Leantime dates come as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" — epoch
 /// millis, local time (matches the TS `new Date(...)` semantics).
 pub(super) fn parse_leantime_ts(s: &str) -> Option<i64> {
-    use chrono::TimeZone;
+    parse_leantime_ts_in(jiff::tz::TimeZone::system(), s)
+}
+
+/// Testable core of [`parse_leantime_ts`] — the timezone is injected so the
+/// DST-ambiguity semantics can be exercised deterministically in tests.
+fn parse_leantime_ts_in(tz: jiff::tz::TimeZone, s: &str) -> Option<i64> {
     let normalized = if s.len() == 10 {
         format!("{}T00:00:00", s)
     } else {
         s.replace(' ', "T")
     };
-    chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S")
+    jiff::fmt::strtime::parse("%Y-%m-%dT%H:%M:%S", &normalized)
         .ok()
-        .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
-        .map(|dt| dt.timestamp_millis())
+        .and_then(|t| t.to_datetime().ok())
+        // `unambiguous()` REJECTS ambiguous/nonexistent times (DST folds and
+        // gaps) — the same `None` chrono's `Local.from_local_datetime(&dt)
+        // .single()` produced, so ambiguous wall times yield no timestamp.
+        .and_then(|dt| tz.to_ambiguous_zoned_datetime(dt).unambiguous().ok())
+        .map(|z| z.timestamp().as_millisecond())
 }
 
 // ---------------------------------------------------------------------------
@@ -529,4 +538,65 @@ pub(super) fn ob(name: &str, desc: impl Into<String>) -> (String, Value) {
         name.to_string(),
         serde_json::json!({ "type": "boolean", "description": desc.into(), "optional": true }),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Tests — parse_leantime_ts (jiff migration semantics)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod leantime_ts_tests {
+    use super::parse_leantime_ts_in;
+
+    fn paris() -> jiff::tz::TimeZone {
+        jiff::tz::TimeZone::get("Europe/Paris").unwrap()
+    }
+
+    fn as_paris_civil(ms: i64) -> String {
+        jiff::Timestamp::from_millisecond(ms)
+            .unwrap()
+            .to_zoned_datetime(paris())
+            .datetime()
+            .to_string()
+    }
+
+    #[test]
+    fn date_only_resolves_to_local_midnight() {
+        let ms = parse_leantime_ts_in(paris(), "2026-06-15").unwrap();
+        assert_eq!(as_paris_civil(ms), "2026-06-15T00:00:00");
+    }
+
+    #[test]
+    fn datetime_with_space_takes_the_local_offset() {
+        // June = CEST (+02:00): the same wall time in UTC would land 2 h off.
+        let ms = parse_leantime_ts_in(paris(), "2026-06-15 14:30:00").unwrap();
+        assert_eq!(as_paris_civil(ms), "2026-06-15T14:30:00");
+    }
+
+    #[test]
+    fn iso_t_separator_is_accepted_too() {
+        let ms = parse_leantime_ts_in(paris(), "2026-06-15T14:30:00").unwrap();
+        assert_eq!(as_paris_civil(ms), "2026-06-15T14:30:00");
+    }
+
+    #[test]
+    fn invalid_shapes_yield_none() {
+        assert_eq!(parse_leantime_ts_in(paris(), "not-a-date"), None);
+        assert_eq!(parse_leantime_ts_in(paris(), "2026-13-45"), None);
+        assert_eq!(parse_leantime_ts_in(paris(), ""), None);
+        assert_eq!(parse_leantime_ts_in(paris(), "2026-06-15 25:00:00"), None);
+    }
+
+    #[test]
+    fn dst_gap_and_fold_yield_none_like_chrono_single() {
+        // 2026-03-29 02:30 falls INSIDE Paris's spring-forward gap
+        // (+01:00 → +02:00 at 02:00→03:00): the wall time never occurred.
+        assert_eq!(parse_leantime_ts_in(paris(), "2026-03-29 02:30:00"), None);
+        // 2026-10-25 02:30 occurs TWICE (fall-back fold at 03:00→02:00):
+        // ambiguous → no timestamp, matching chrono's `.single()`.
+        assert_eq!(parse_leantime_ts_in(paris(), "2026-10-25 02:30:00"), None);
+        // The unambiguous instants around the transition still resolve.
+        assert!(parse_leantime_ts_in(paris(), "2026-03-29 01:30:00").is_some());
+        assert!(parse_leantime_ts_in(paris(), "2026-03-29 03:30:00").is_some());
+    }
 }
