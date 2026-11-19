@@ -11,7 +11,7 @@
 [![crates.io](https://img.shields.io/crates/v/leantime-mcp)](https://crates.io/crates/leantime-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-An unofficial [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantime](https://leantime.io/), designed agent-first: it lets LLM tools (opencode, Claude Code, Claude Desktop, Cursor, Codex, or any MCP client) work on your Leantime projects through 42 tools with dry-run validation, bulk operations, backup/restore and one-call project context.
+An unofficial [Model Context Protocol](https://modelcontextprotocol.io/) server for [Leantime](https://leantime.io/), designed agent-first: it lets LLM tools (opencode, Claude Code, Claude Desktop, Cursor, Codex, or any MCP client) work on your Leantime projects through 43 tools with dry-run validation, bulk operations, backup/restore and one-call project context.
 
 It is an independent, open-source integration — stdio only, running locally with your own API key and your own instance. It does not aim to replace Leantime's official offerings; if you want vendor-supported integrations, use those.
 
@@ -37,7 +37,7 @@ An example session (abridged):
 
 ## Features
 
-- 42 tools: projects, tickets, subtasks, milestones, sprints, comments, time tracking, bulk operations
+- 43 tools: projects, tickets, subtasks, milestones, sprints, comments, time tracking, bulk operations
 - `leantime_project_context` — the whole project picture in one call (progress, health, sprint, milestones), under 4 KB
 - `dryRun: true` on every mutation — same validations, `from → to` diffs on updates, no write requests
 - `idempotencyKey` on creation tools — a retried call with an already-succeeded key replays the original result instead of writing a duplicate
@@ -127,7 +127,7 @@ This software is provided without warranty (MIT). It drives Leantime with your A
 
 ## Tools
 
-42 tools across 9 domains: projects & clients (8), tickets (10), comments (4), time tracking (4), milestones (6), sprints (4), users (1), bulk operations (3), backup & context (2). Updates use the patch API — only provided fields change. Descriptions follow a Markdown subset converted server-side; raw HTML in input is escaped.
+43 tools across 9 domains: projects & clients (8), tickets (11), comments (4), time tracking (4), milestones (6), sprints (4), users (1), bulk operations (3), backup & context (2). Updates use the patch API — only provided fields change. Descriptions follow a Markdown subset converted server-side; raw HTML in input is escaped.
 
 <details>
 <summary><b>Supported Markdown subset</b> (for descriptions and comments)</summary>
@@ -149,7 +149,7 @@ Raw HTML in descriptions is escaped before reaching Leantime — it renders as l
 </details>
 
 <details>
-<summary><b>All 42 tools</b> (click to expand)</summary>
+<summary><b>All 43 tools</b> (click to expand)</summary>
 
 **Projects & clients**
 
@@ -170,6 +170,7 @@ Raw HTML in descriptions is escaped before reaching Leantime — it renders as l
 |------|-------------|
 | `leantime_list_tickets` | List tickets with filters (status, milestone, sprint, user, type, search) |
 | `leantime_get_ticket` | Get ticket details |
+| `leantime_get_ticket_url` | Ticket browser URL (deep link) — verifies existence, returns headline and projectId; link sessions/PRs to tickets |
 | `leantime_create_ticket` | Create a ticket (Markdown description, mandatory assignment, subtasks via dependingTicketId; `dryRun` supported) |
 | `leantime_update_ticket` | Update a ticket (patch — only provided fields change; `dryRun` supported) |
 | `leantime_delete_ticket` | Delete a ticket (confirm-gated) |

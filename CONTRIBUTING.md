@@ -42,7 +42,7 @@ cargo test --test e2e_local -- --nocapture --test-threads=1
 | `tests/tools_test.rs` | Handlers via mockito: patch semantics, sprint full-field resend, id de-mangling, end-of-day timesheets, computed current sprint, destructive matrix, editorId validation, log_time validation, bulk paths, status label resolution, dry-run, guidance regression, enrichment |
 | `tests/key_rotate_test.rs` | Rotation choreography: happy path + relations copy, verification failure leaves keyring untouched, unknown key aborts, relation-copy failure warns, creation refusal aborts |
 | `tests/e2e_readonly.rs` | Opt-in (`LEANTIME_URL`+`LEANTIME_API_KEY`): projects non-vacuous, statuses shape, enrichment, milestones — with loud skips |
-| `tests/e2e/run.sh` | Binary-level smoke: MCP handshake, 42 tools, live API calls, assignment enforcement, doctor |
+| `tests/e2e/run.sh` | Binary-level smoke: MCP handshake, 43 tools, live API calls, assignment enforcement, doctor |
 | `tests/e2e_local.rs` | **Exhaustive e2e** — opt-in with `LEANTIME_E2E=local`: scratch project, full tool surface, scoping/field-wiping regressions, destructive gating (incl. deny), bulk cycles, capture-only cleanup |
 
 Expectations:

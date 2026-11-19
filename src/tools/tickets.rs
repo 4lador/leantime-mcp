@@ -168,6 +168,35 @@ fn h_get_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> +
     })
 }
 
+fn h_get_ticket_url(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
+    Box::pin(async move {
+        let mut c = cl.lock().await;
+        let tid = a.get("ticketId").and_then(|v| v.as_str()).unwrap_or("");
+        // One read to verify the ticket exists — headline/projectId come free
+        // with it. A missing ID arrives as `[false]` (the JSON-RPC scalar
+        // wrapper, see is_absent), bare `false` on older versions, or a soft
+        // error object; all three must surface "not found", not a URL.
+        match c.call("tickets.getTicket", json!({"id": tid})).await {
+            Ok(r) if !is_leantime_error(&r) && !is_absent(&r) => {
+                // The SPA's context-free deep link (the same shape the UI's
+                // "copy link" produces): {base}/#/tickets/showTicket/{id}.
+                // Built from the CONFIGURED base_url — behind a reverse proxy
+                // exposing a different public URL, the link carries the
+                // instance URL the MCP was given.
+                let url = format!("{}/#/tickets/showTicket/{}", c.base_url(), tid);
+                ok_result(&json!({
+                    "id": tid,
+                    "url": url,
+                    "headline": r.get("headline").cloned().unwrap_or(Value::Null),
+                    "projectId": r.get("projectId").cloned().unwrap_or(Value::Null),
+                }))
+            }
+            Ok(_) => error_result(&format!("Ticket {} not found.", tid)),
+            Err(e) => error_result(&e.to_string()),
+        }
+    })
+}
+
 fn h_create_ticket(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Value> + Send>> {
     Box::pin(async move {
         let mut c = cl.lock().await;
@@ -491,6 +520,8 @@ pub(super) fn tools() -> Vec<Tool> {
             vec!["projectId"], Box::new(h_list_tickets)),
         tool("leantime_get_ticket", "Get details of a specific ticket/task",
             vec![rs("projectId", "The project ID"), rs("ticketId", "The ticket ID")], vec!["projectId", "ticketId"], Box::new(h_get_ticket)),
+        tool("leantime_get_ticket_url", "Get the browser URL of a ticket (…/#/tickets/showTicket/{id}) — verifies the ticket exists and returns its headline and projectId. Use it to link artifacts (sessions, pull requests, docs) to the ticket. The URL uses the instance URL configured for this server; if the instance is reachable at a different public address, adapt the host accordingly.",
+            vec![rs("ticketId", "The ticket ID")], vec!["ticketId"], Box::new(h_get_ticket_url)),
         tool_with_annotations("leantime_create_ticket", format!("Create a new ticket/task in a project. The description is {}. {} Pass the chosen editorId (get candidates with leantime_list_users), or pass unassigned: true ONLY if the user explicitly said to leave it unassigned. Call directly when the user explicitly provided every value. Prefer dryRun: true first when you chose or inferred any value (type, priority, dates…) — show the proposed fields and ask for confirmation before executing.", md, assignment),
             vec![rs("projectId", "The project ID"), rs("headline", "Ticket title/headline"), os("description", format!("Ticket description in {}", md)), os("type", "Ticket type (task, story, bug, etc.)"), on("priority", "Priority (1-5)"), on("status", "Status ID"), os("milestoneId", "Milestone ID to assign to"), os("sprintId", "Sprint ID to assign to"), os("editorId", "Assigned user ID (required unless unassigned: true)"), ob("unassigned", "Set to true ONLY when the user explicitly requested an unassigned ticket"), os("tags", "Comma-separated tags"), os("storypoints", "Story points"), os("dateToFinish", "Due date (YYYY-MM-DD)"), os("dependingTicketId", "Parent ticket ID (for subtasks)"), on("planHours", "Planned hours estimate"), ob("dryRun", DRY_RUN_DESC), os("idempotencyKey", IDEMPOTENCY_HINT)],
             vec!["projectId", "headline"], Box::new(h_create_ticket), ToolAnnotations::write()),

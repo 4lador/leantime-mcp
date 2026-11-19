@@ -625,6 +625,99 @@ async fn get_ticket_enrichment_handles_string_status() {
     assert_eq!(parsed["statusLabel"], json!("In Progress"));
 }
 
+// -------------------------------------------------------------- ticket URL
+
+#[tokio::test]
+async fn get_ticket_url_builds_deep_link_from_configured_base() {
+    let mut server = Server::new_async().await;
+    let _get = server
+        .mock("POST", "/api/jsonrpc")
+        .match_body(mockito::Matcher::PartialJsonString(
+            json!({"method": "leantime.rpc.tickets.getTicket", "params": {"id": "14"}}).to_string(),
+        ))
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(
+            json!({"id": "14", "headline": "Fix login", "projectId": "3"}),
+        ))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_get_ticket_url",
+        json!({"ticketId": "14"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, parsed) = parse(&r);
+    assert!(!is_err, "{:?}", parsed);
+    // The random mockito port proves the URL derives from the client's
+    // configured base_url, not a constant.
+    assert_eq!(
+        parsed["url"],
+        json!(format!("{}/#/tickets/showTicket/14", server.url()))
+    );
+    assert_eq!(parsed["id"], json!("14"));
+    assert_eq!(parsed["headline"], json!("Fix login"));
+    assert_eq!(parsed["projectId"], json!("3"));
+}
+
+#[tokio::test]
+async fn get_ticket_url_missing_ticket_errors() {
+    // The REAL wire shape: the JSON-RPC scalar wrapper turns the service's
+    // `false` into `[false]` (verified live — this exact mock divergence is
+    // what v2.8.1's blind spot looked like).
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("POST", "/api/jsonrpc")
+        .with_status(200)
+        .with_header("Content-Type", "application/json")
+        .with_body(rpc_ok(json!([false])))
+        .create_async()
+        .await;
+
+    let r = call(
+        "leantime_get_ticket_url",
+        json!({"ticketId": "404"}),
+        &server.url(),
+    )
+    .await;
+    let (is_err, text) = parse(&r);
+    assert!(is_err);
+    assert_eq!(text, json!("Ticket 404 not found."));
+}
+
+#[tokio::test]
+async fn get_ticket_url_missing_ticket_version_drift() {
+    // Older/other versions: bare `false`, `null`, or an empty container —
+    // every "nothing there" shape must error, never produce a URL.
+    for body in [
+        rpc_ok(json!(false)),
+        rpc_ok(json!(null)),
+        rpc_ok(json!([])),
+        rpc_ok(json!([null])),
+    ] {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/api/jsonrpc")
+            .with_status(200)
+            .with_header("Content-Type", "application/json")
+            .with_body(body.clone())
+            .create_async()
+            .await;
+
+        let r = call(
+            "leantime_get_ticket_url",
+            json!({"ticketId": "404"}),
+            &server.url(),
+        )
+        .await;
+        let (is_err, text) = parse(&r);
+        assert!(is_err, "shape {:?} should be an error: {:?}", body, text);
+        assert_eq!(text, json!("Ticket 404 not found."));
+    }
+}
+
 // ---------------------------------------------------------------- comments
 
 #[tokio::test]

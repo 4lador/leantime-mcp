@@ -10,7 +10,7 @@ fn readonly_profile_filters_and_default_restores() {
     // Default: full registry
     std::env::remove_var("LEANTIME_MCP_PROFILE");
     let full = tools::create_registry();
-    assert_eq!(full.len(), 42, "default profile keeps all tools");
+    assert_eq!(full.len(), 43, "default profile keeps all tools");
 
     // Readonly: write and destructive handlers are removed at construction
     std::env::set_var("LEANTIME_MCP_PROFILE", "readonly");
@@ -33,6 +33,7 @@ fn readonly_profile_filters_and_default_restores() {
     );
     // reads stay: list, get, project_context, backup (API-read-only)
     assert!(readonly.iter().any(|t| t.name == "leantime_list_tickets"));
+    assert!(readonly.iter().any(|t| t.name == "leantime_get_ticket_url"));
     assert!(readonly
         .iter()
         .any(|t| t.name == "leantime_project_context"));
@@ -42,5 +43,5 @@ fn readonly_profile_filters_and_default_restores() {
 
     // And back: removing the variable restores the full registry
     let again = tools::create_registry();
-    assert_eq!(again.len(), 42);
+    assert_eq!(again.len(), 43);
 }

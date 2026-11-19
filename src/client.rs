@@ -424,6 +424,12 @@ impl LeantimeClient {
         self.idempotency_dir.as_deref()
     }
 
+    /// The instance base URL this client talks to (trailing slash stripped).
+    /// URL-building tools derive browser deep links from it.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// The instance's requests-per-minute allowance: discovered from 429
     /// headers when one has been seen, the documented default otherwise.
     /// Bulk tools read it to estimate batch duration.

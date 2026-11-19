@@ -2,19 +2,19 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.4lador/leantime-mcp",
   "title": "Leantime MCP (Unofficial)",
-  "description": "Unofficial MCP server for Leantime: 42 agent-first tools, backup/restore, dry-run validation",
+  "description": "Unofficial MCP server for Leantime: 43 agent-first tools, backup/restore, dry-run validation",
   "repository": {
     "url": "https://github.com/4lador/leantime-mcp",
     "source": "github",
     "id": "1226618766"
   },
   "websiteUrl": "https://github.com/4lador/leantime-mcp",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "packages": [
     {
       "registryType": "cargo",
       "identifier": "leantime-mcp",
-      "version": "2.9.0",
+      "version": "2.10.0",
       "transport": {
         "type": "stdio"
       },

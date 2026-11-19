@@ -781,7 +781,7 @@ fn format_size(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 
 /// Resolve a user-provided target (tool name or group name) into tool names.
-/// Groups: all (42), destructive (delete_* + bulk_*), readonly (list/get/find/
+/// Groups: all (43), destructive (delete_* + bulk_*), readonly (list/get/find/
 /// my_tasks/backup/project_context), write (create/update/add/log —
 /// everything that mutates).
 fn resolve_target(target: &str, registry: &[tools::Tool]) -> Result<Vec<String>, String> {

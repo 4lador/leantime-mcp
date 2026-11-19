@@ -68,7 +68,7 @@ no environment variables required (the keyring provides them).
 `LEANTIME_URL` / `LEANTIME_API_KEY` environment variables remain available
 as per-run overrides. Protocol revisions `2024-11-05` and `2025-06-18` are
 supported and negotiated at handshake (the client's version is echoed when
-known). All 42 tools carry MCP annotations (`readOnlyHint`,
+known). All 43 tools carry MCP annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can group,
 gate and cache them intelligently.
 

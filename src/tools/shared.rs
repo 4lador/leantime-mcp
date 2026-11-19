@@ -288,6 +288,26 @@ pub(super) fn mutation_ok(v: &Value) -> bool {
     !(is_leantime_error(v) || effective == &Value::Bool(false))
 }
 
+/// True when a single-entity read came back "nothing there".
+///
+/// Same wire quirk as [`mutation_ok`]: the JSON-RPC controller wraps scalar
+/// service returns in a single-element array, so a missing ticket reaches us
+/// as `[false]` — and bare `false` or a soft-error object occur on other
+/// versions. An empty container is treated as absent too: a real ticket,
+/// milestone or comment is always a non-empty object with an id.
+pub(super) fn is_absent(v: &Value) -> bool {
+    let effective = match v {
+        Value::Array(a) if a.len() == 1 => &a[0],
+        _ => v,
+    };
+    match effective {
+        Value::Bool(false) | Value::Null => true,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        _ => false,
+    }
+}
+
 /// Fetch the user list (cached 5 min) as simplified `(id, name)` pairs.
 pub(super) async fn get_users_simplified(
     c: &mut LeantimeClient,

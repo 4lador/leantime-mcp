@@ -1,4 +1,4 @@
-//! The 42 MCP tools, split by domain. [`tools::create_registry`] returns them
+//! The 43 MCP tools, split by domain. [`tools::create_registry`] returns them
 //! all; handlers close over a shared [`tools::ClientRef`].
 
 mod backup;
@@ -146,10 +146,10 @@ fn rpc(method: &'static str, map: fn(&Value) -> Value) -> Handler {
     )
 }
 
-/// All 42 tools, in stable registry order (projects, tickets, milestones,
+/// All 43 tools, in stable registry order (projects, tickets, milestones,
 /// sprints, users, comments, timesheets, bulk, backup, project_context).
 pub fn create_registry() -> Vec<Tool> {
-    let mut tools = Vec::with_capacity(42);
+    let mut tools = Vec::with_capacity(43);
     tools.extend(projects::tools());
     tools.extend(tickets::tools());
     tools.extend(milestones::tools());
