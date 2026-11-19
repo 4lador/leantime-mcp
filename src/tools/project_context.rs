@@ -44,7 +44,11 @@ fn ts_of(v: Option<&Value>) -> Option<i64> {
 fn ms_to_date(ms: i64) -> String {
     jiff::Timestamp::from_millisecond(ms)
         .ok()
-        .map(|ts| ts.to_zoned_datetime(jiff::tz::TimeZone::system()).date().to_string())
+        .map(|ts| {
+            ts.to_zoned_datetime(jiff::tz::TimeZone::system())
+                .date()
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -369,8 +373,10 @@ fn h_project_context(a: Value, cl: ClientRef) -> Pin<Box<dyn Future<Output = Val
         let mut out = Map::new();
         out.insert(
             "generatedAt".into(),
-            json!(jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now())
-                .expect("fixed strtime pattern is always valid")),
+            json!(
+                jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now())
+                    .expect("fixed strtime pattern is always valid")
+            ),
         );
         if !chunk_warnings.is_empty() {
             out.insert("warnings".into(), json!(chunk_warnings));

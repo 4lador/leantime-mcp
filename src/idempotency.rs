@@ -220,9 +220,8 @@ mod tests {
         let path = dir.join("idempotency.json");
         let raw = std::fs::read_to_string(&path).unwrap();
         let ancient = jiff::Timestamp::now() - jiff::Span::new().hours(3650 * 24);
-        let ts_str = |t: jiff::Timestamp| {
-            jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap()
-        };
+        let ts_str =
+            |t: jiff::Timestamp| jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap();
         let raw = raw.replace(&ts_str(jiff::Timestamp::now()), &ts_str(ancient));
         std::fs::write(&path, raw).unwrap();
         std::env::set_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS", "0");
@@ -241,51 +240,27 @@ mod tests {
 
     #[test]
     fn ttl_boundary_floors_to_whole_days() {
-        let dir = tmpdir("ttlb");
-        let path = dir.join("idempotency.json");
-        let entry_at = |hours_ago: i64| {
-            let t = jiff::Timestamp::now() - jiff::Span::new().hours(hours_ago);
-            json!({
-                "tool": "leantime_create_ticket",
-                "result": {"id": 3},
-                "recordedAt": jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap(),
-            })
-        };
-        std::env::set_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS", "7");
-        // 6 days + 23 h old → 6 WHOLE days → inside the TTL → Hit.
-        std::fs::write(
-            &path,
-            json!({"entries": {"k6": entry_at(6 * 24 + 23)}}).to_string(),
-        )
-        .unwrap();
-        assert!(matches!(
-            lookup(Some(&dir), "k6", "leantime_create_ticket"),
-            Lookup::Hit(_)
-        ));
-        // Pile 7 jours : recordedAt tronqué à la seconde PUIS reculé de
-        // 7×24 h — le delta mesuré au lookup dépasse forcément 7 jours,
-        // le floor ≥ 7 → expiré → Miss. La borne >= reflète num_days().
+        // Pure-function boundary on is_expired — deliberately NOT driven
+        // through lookup(): sibling tests set/remove the TTL env var in the
+        // same process, and a test that races on it is flaky across runners.
         let now_str =
             jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", jiff::Timestamp::now()).unwrap();
-        let exact7 =
-            now_str.parse::<jiff::Timestamp>().unwrap() - jiff::Span::new().hours(7 * 24);
-        let exact7_str = jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", exact7).unwrap();
-        std::fs::write(
-            &path,
-            json!({"entries": {"k7": {
-                "tool": "leantime_create_ticket",
-                "result": {"id": 4},
-                "recordedAt": exact7_str,
-            }}})
-            .to_string(),
-        )
-        .unwrap();
-        assert!(matches!(
-            lookup(Some(&dir), "k7", "leantime_create_ticket"),
-            Lookup::Miss
-        ));
-        std::env::remove_var("LEANTIME_MCP_IDEMPOTENCY_TTL_DAYS");
-        let _ = std::fs::remove_dir_all(&dir);
+        let at = |hours_ago: i64| {
+            let t =
+                now_str.parse::<jiff::Timestamp>().unwrap() - jiff::Span::new().hours(hours_ago);
+            jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", t).unwrap()
+        };
+        // 6 days + 23 h old → 6 WHOLE days → inside a 7-day TTL.
+        assert!(!is_expired(&at(6 * 24 + 23), 7));
+        // recordedAt is truncated to the second BEFORE going back 7×24 h, so
+        // the measured delta at read time is ≥ 7 days no matter how much the
+        // clock advanced mid-test → expired. The >= floor matches chrono's
+        // num_days() semantics.
+        assert!(is_expired(&at(7 * 24), 7));
+        assert!(is_expired(&at(7 * 24 + 1), 7));
+        // Unparseable timestamps count as expired (fail closed).
+        assert!(is_expired("not-a-timestamp", 7));
+        assert!(is_expired("", 7));
     }
 
     #[test]
